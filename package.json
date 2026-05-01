@@ -1,0 +1,23 @@
+{
+  "name": "gmail-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mike's max-unlock Gmail CLI + MCP server. Full Gmail API surface: send, drafts with attachments, threaded replies, labels, filters, settings (vacation/signatures/forwarding/delegates/IMAP/POP), watch, history.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "gmail-cli": "bin/gmail-cli.js",
+    "gmail-mcp": "bin/gmail-mcp.js"
+  },
+  "scripts": {
+    "auth": "node bin/gmail-cli.js auth",
+    "mcp": "node bin/gmail-mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "googleapis": "^144.0.0",
+    "open": "^10.1.0"
+  }
+}
