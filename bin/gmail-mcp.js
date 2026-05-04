@@ -326,7 +326,7 @@ const TOOLS = {
   list_send_as:   { description: 'List send-as aliases (each carries its own signature).', inputSchema: { type: 'object', properties: {} }, handler: G.listSendAs },
   get_send_as:    { description: 'Get a send-as alias by email.', inputSchema: { type: 'object', properties: { sendAsEmail: { type: 'string' } }, required: ['sendAsEmail'] }, handler: G.getSendAs },
   create_send_as: {
-    description: 'Create a send-as alias (custom From + signature).',
+    description: 'Create a send-as alias. WORKSPACE-ONLY — fails with 403 "domain-wide authority" on personal Gmail accounts. Direct Mike to Gmail web UI Settings → Accounts → Send mail as for personal-account operations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -357,7 +357,7 @@ const TOOLS = {
     },
     handler: G.updateSendAs,
   },
-  delete_send_as: { description: 'Delete a send-as alias.', inputSchema: { type: 'object', properties: { sendAsEmail: { type: 'string' } }, required: ['sendAsEmail'] }, handler: G.deleteSendAs },
+  delete_send_as: { description: 'Delete a send-as alias. WORKSPACE-ONLY — fails on personal Gmail accounts. Use Gmail web UI Settings → Accounts → Send mail as instead.', inputSchema: { type: 'object', properties: { sendAsEmail: { type: 'string' } }, required: ['sendAsEmail'] }, handler: G.deleteSendAs },
   verify_send_as: { description: 'Send the verification email for a send-as alias.', inputSchema: { type: 'object', properties: { sendAsEmail: { type: 'string' } }, required: ['sendAsEmail'] }, handler: G.verifySendAs },
 
   // Forwarding addresses
@@ -369,8 +369,8 @@ const TOOLS = {
   // Delegates
   list_delegates:  { description: 'List delegate accounts.', inputSchema: { type: 'object', properties: {} }, handler: G.listDelegates },
   get_delegate:    { description: 'Get a delegate.', inputSchema: { type: 'object', properties: { delegateEmail: { type: 'string' } }, required: ['delegateEmail'] }, handler: G.getDelegate },
-  create_delegate: { description: 'Add a delegate (Workspace only; sends acceptance email).', inputSchema: { type: 'object', properties: { delegateEmail: { type: 'string' } }, required: ['delegateEmail'] }, handler: G.createDelegate },
-  delete_delegate: { description: 'Remove a delegate.', inputSchema: { type: 'object', properties: { delegateEmail: { type: 'string' } }, required: ['delegateEmail'] }, handler: G.deleteDelegate },
+  create_delegate: { description: 'Add a delegate. WORKSPACE-ONLY — fails on personal Gmail accounts (requires service account with domain-wide delegation).', inputSchema: { type: 'object', properties: { delegateEmail: { type: 'string' } }, required: ['delegateEmail'] }, handler: G.createDelegate },
+  delete_delegate: { description: 'Remove a delegate. WORKSPACE-ONLY — fails on personal Gmail accounts.', inputSchema: { type: 'object', properties: { delegateEmail: { type: 'string' } }, required: ['delegateEmail'] }, handler: G.deleteDelegate },
 
   // S/MIME
   list_smime:        { description: 'List S/MIME configs for a send-as alias.', inputSchema: { type: 'object', properties: { sendAsEmail: { type: 'string' } }, required: ['sendAsEmail'] }, handler: G.listSmimeInfo },

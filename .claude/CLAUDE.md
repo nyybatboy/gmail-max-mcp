@@ -43,6 +43,14 @@ When another agent reports that "the Gmail MCP can't X," you know whether `claud
 - Tell Mike a re-consent is needed; never silently invalidate his token.
 - Bump the scope-check logic in `runAuthStatus` (in `bin/gmail-cli.js`) if the new scope is not a Gmail-namespaced URL.
 
+**Workspace-only operations (Mike has personal Gmail, not Workspace):**
+- `users.settings.sendAs.create` — fails with 403 "Access restricted to service accounts that have been delegated domain-wide authority"
+- `users.settings.sendAs.delete` — same
+- `users.settings.delegates.create` — same
+- `users.settings.delegates.delete` — same
+- These endpoints require a Google Workspace service account with domain-wide delegation, regardless of what scopes we grant. They will NEVER work for Mike's personal account. The corresponding tools (`createSendAs`, `deleteSendAs`, `createDelegate`, `deleteDelegate`) are still defined in `lib/gmail.js` for completeness/future-Workspace-deployment, but tell Mike to use Gmail web UI when he asks for these operations on his personal account.
+- Send-as **PATCH** (signature/displayName updates via `updateSendAs`) does work for personal Gmail — that's a different endpoint with looser auth requirements.
+
 ### Session Start
 
 Postmaster orients to this project, not the system. On session start:
