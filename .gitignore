@@ -1,7 +1,7 @@
 node_modules/
 *.log
 .DS_Store
-# never commit any local credential drops accidentally placed here
-credentials.json
-token.json
-client_secret*.json
+# never commit credential drops or local profile cache
+*.pem
+*.p12
+profile.json
