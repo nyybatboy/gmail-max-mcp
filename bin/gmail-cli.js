@@ -1,13 +1,20 @@
 #!/usr/bin/env node
-import { runAuthFlow, TOKEN_PATH, CREDENTIALS_PATH } from '../lib/auth.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { adcPath, SCOPES } from '../lib/auth.js';
 import * as G from '../lib/gmail.js';
+
+const PROFILE_CACHE = path.join(os.homedir(), '.gmail-mcp', 'profile.json');
+const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function usage() {
   console.error(`gmail-cli <command> [--json '<obj>'] [--<flag> <val>...]
 
 Auth:
-  auth                              Run OAuth desktop flow (one-time)
-  whoami                            Print profile + email address
+  auth-status                       Diagnose ADC setup; print fix command for any failure
+  whoami                            Print profile + email address (cached)
 
 Messages:
   list-messages    --q <query> --max <n> --label <id>...
@@ -92,9 +99,219 @@ Common:
   --raw            Print raw JSON without indent
 
 Paths:
-  Credentials: ${CREDENTIALS_PATH}
-  Token:       ${TOKEN_PATH}
+  ADC credentials: ${adcPath()}
+  Profile cache:   ${PROFILE_CACHE}
 `);
+}
+
+function which(cmd) {
+  try {
+    return execFileSync('which', [cmd], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function gcloudVersion() {
+  try {
+    return execFileSync('gcloud', ['--version'], { encoding: 'utf8' })
+      .split('\n')[0]
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+function gcloudConfig(key) {
+  try {
+    const v = execFileSync('gcloud', ['config', 'get-value', key], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return v && v !== '(unset)' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function readAdcFile() {
+  const p = adcPath();
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function gmailApiEnabled(project) {
+  try {
+    const out = execFileSync(
+      'gcloud',
+      [
+        'services',
+        'list',
+        '--enabled',
+        '--filter=config.name=gmail.googleapis.com',
+        '--format=value(config.name)',
+        ...(project ? [`--project=${project}`] : []),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    return out.includes('gmail.googleapis.com');
+  } catch {
+    return null; // unknown — gcloud failed (no project, no auth, etc.)
+  }
+}
+
+function readProfileCache() {
+  try {
+    if (!fs.existsSync(PROFILE_CACHE)) return null;
+    const cached = JSON.parse(fs.readFileSync(PROFILE_CACHE, 'utf8'));
+    if (Date.now() - (cached.cachedAt || 0) > PROFILE_TTL_MS) return null;
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+function writeProfileCache(profile) {
+  try {
+    fs.mkdirSync(path.dirname(PROFILE_CACHE), { recursive: true });
+    fs.writeFileSync(
+      PROFILE_CACHE,
+      JSON.stringify({ ...profile, cachedAt: Date.now() }, null, 2),
+      { mode: 0o600 }
+    );
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function runAuthStatus({ json: jsonOut = false } = {}) {
+  const checks = [];
+  let firstFailure = null;
+  function record(ok, label, detail, fix) {
+    const entry = { ok, label, detail, fix };
+    checks.push(entry);
+    if (!ok && !firstFailure) firstFailure = entry;
+  }
+
+  // 1. gcloud installed?
+  const gPath = which('gcloud');
+  if (!gPath) {
+    record(false, 'gcloud installed', 'not found in PATH',
+      'brew install --cask gcloud-cli');
+  } else {
+    record(true, 'gcloud installed', gcloudVersion() || gPath, null);
+  }
+
+  // 2. ADC file present?
+  const adc = readAdcFile();
+  if (!adc) {
+    record(false, 'ADC credentials present', adcPath(),
+      `gcloud auth application-default login --scopes=${SCOPES.join(',')}`);
+  } else {
+    record(true, 'ADC credentials present', adcPath(), null);
+  }
+
+  // 3. ADC has Gmail scope (best-effort: many ADC files don't store scopes,
+  //    so we don't fail this — just inform). The live API call (#6) is the
+  //    real test.
+  if (adc) {
+    const scopes = adc.scopes || adc.granted_scopes || null;
+    if (Array.isArray(scopes)) {
+      const hasGmail = scopes.some((s) => s === 'https://mail.google.com/' ||
+        s.startsWith('https://www.googleapis.com/auth/gmail'));
+      record(
+        hasGmail,
+        'Gmail scope granted',
+        scopes.join(' '),
+        hasGmail
+          ? null
+          : `gcloud auth application-default login --scopes=${SCOPES.join(',')}`
+      );
+    } else {
+      record(true, 'Gmail scope granted', 'not introspectable in ADC file (will verify via live call)', null);
+    }
+  }
+
+  // 4. Quota project
+  const quotaProject = adc?.quota_project_id || null;
+  const gcloudProject = gPath ? gcloudConfig('project') : null;
+  if (quotaProject) {
+    record(true, 'Quota project (ADC)', quotaProject, null);
+    if (gcloudProject && gcloudProject !== quotaProject) {
+      record(true, 'gcloud config project',
+        `${gcloudProject} (differs from ADC quota project — usually fine, flagged for awareness)`,
+        null);
+    }
+  } else {
+    record(false, 'Quota project (ADC)', 'unset',
+      `gcloud auth application-default set-quota-project ${gcloudProject || '<PROJECT_ID>'}`);
+  }
+
+  // 5. Gmail API enabled on quota project
+  const project = quotaProject || gcloudProject;
+  if (gPath && project) {
+    const enabled = gmailApiEnabled(project);
+    if (enabled === true) {
+      record(true, 'Gmail API enabled', `gmail.googleapis.com on ${project}`, null);
+    } else if (enabled === false) {
+      record(false, 'Gmail API enabled', `not enabled on ${project}`,
+        `gcloud services enable gmail.googleapis.com --project=${project}`);
+    } else {
+      record(true, 'Gmail API enabled', 'unknown (gcloud check failed; will verify via live call)', null);
+    }
+  }
+
+  // 6. Live call (only if no prior failure)
+  if (!firstFailure) {
+    try {
+      const profile = await G.getProfile();
+      writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId });
+      record(true, 'Live API call (getProfile)',
+        `${profile.emailAddress} (historyId=${profile.historyId})`, null);
+    } catch (err) {
+      record(false, 'Live API call (getProfile)', err.message,
+        err.userActionable ? null : 'Check the error detail above');
+    }
+  } else {
+    record(true, 'Live API call (getProfile)', 'skipped (prior step failed)', null);
+  }
+
+  if (jsonOut) {
+    return { ok: !firstFailure, checks, firstFailure };
+  }
+
+  // Pretty print
+  const lines = [];
+  lines.push('gmail-mcp auth-status');
+  lines.push('─'.repeat(34));
+  for (const c of checks) {
+    const tag = c.ok ? '[ok]  ' : '[FAIL]';
+    if (c.label === 'Live API call (getProfile)' && c.detail === 'skipped (prior step failed)') {
+      lines.push(`[skip] ${c.label.padEnd(28)} ${c.detail}`);
+    } else {
+      lines.push(`${tag} ${c.label.padEnd(28)} ${c.detail || ''}`);
+    }
+  }
+  if (firstFailure && firstFailure.fix) {
+    lines.push('');
+    lines.push(`Fix:  ${firstFailure.fix}`);
+  }
+  process.stdout.write(lines.join('\n') + '\n');
+  process.exit(firstFailure ? 1 : 0);
+}
+
+async function whoamiCached() {
+  const cached = readProfileCache();
+  if (cached?.email) {
+    return { ...cached, fromCache: true };
+  }
+  const profile = await G.getProfile();
+  writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId });
+  return profile;
 }
 
 function parseArgs(argv) {
@@ -164,12 +381,18 @@ async function main() {
 
   try {
     switch (cmd) {
-      case 'auth':
-        await runAuthFlow();
-        out({ ok: true, savedTo: TOKEN_PATH });
+      case 'auth-status': {
+        const wantJson = f.json === true || f.raw === true;
+        const result = await runAuthStatus({ json: wantJson });
+        if (wantJson) {
+          out(result);
+          process.exit(result.ok ? 0 : 1);
+        }
+        // pretty-print path already wrote + exited inside runAuthStatus
         break;
+      }
       case 'whoami':
-        out(await G.getProfile());
+        out(f.fresh ? await G.getProfile() : await whoamiCached());
         break;
 
       // Messages
