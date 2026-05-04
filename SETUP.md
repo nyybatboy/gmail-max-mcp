@@ -1,62 +1,63 @@
 # Setup
 
-## 1. Install dependencies
-
-Already done if you see `node_modules/`. Otherwise:
+## One-time
 
 ```bash
-cd ~/Webdev/gmail-mcp && npm install
+# 1. Install gcloud (~700MB on disk).
+brew install --cask gcloud-cli
+
+# 2. Authorize (browser opens, you click consent, refresh token cached locally).
+gcloud auth application-default login --scopes=https://mail.google.com/
 ```
 
-## 2. Create a Google Cloud OAuth desktop client (one-time, ~5 min)
+That's the whole setup, assuming `gcloud config get-value project` returns a project that has the Gmail API enabled. If not, `auth-status` (next section) tells you exactly what's still missing.
 
-This is the one step that genuinely requires you to click through Google's UI. The OAuth client is what authorizes *this local app* (running on your Mac) to act on *your* Gmail with whatever scopes you grant. It's tied to your Google account, not to anyone else's.
-
-1. Go to <https://console.cloud.google.com/projectcreate> — create a project (any name, e.g. `mike-gmail-mcp`).
-2. With that project selected, enable the Gmail API: <https://console.cloud.google.com/apis/library/gmail.googleapis.com> → **Enable**.
-3. Configure the OAuth consent screen: <https://console.cloud.google.com/apis/credentials/consent>.
-   - User type: **External**
-   - App name: anything (e.g. `gmail-mcp`)
-   - User support email + developer email: your email
-   - Skip the optional fields. **Save.**
-   - Under **Test users**, add your own Gmail address. (Personal-use apps stay in "Testing" status forever, which is fine — refresh tokens won't expire on you as long as you're a listed test user.)
-4. Create credentials: <https://console.cloud.google.com/apis/credentials>.
-   - **Create Credentials → OAuth client ID**
-   - Application type: **Desktop app**
-   - Name: `gmail-mcp`
-   - **Create**, then **Download JSON**.
-
-## 3. Drop the credentials and authorize
+## Verify and fix
 
 ```bash
-mkdir -p ~/.gmail-mcp
-chmod 700 ~/.gmail-mcp
-mv ~/Downloads/client_secret_*.json ~/.gmail-mcp/credentials.json
-chmod 600 ~/.gmail-mcp/credentials.json
-
 cd ~/Webdev/gmail-mcp
-node bin/gmail-cli.js auth
+npm install                              # one-time
+node bin/gmail-cli.js auth-status        # diagnostic, prints fix command for any failure
+node bin/gmail-cli.js whoami             # confirms live API call works
 ```
 
-A browser tab opens. Sign in to your Gmail account, accept the consent (you'll see "Google hasn't verified this app" — that's expected for a personal-use Desktop client; click Advanced → Go to gmail-mcp). The CLI captures the redirect, writes the refresh token to `~/.gmail-mcp/token.json`, and exits.
+`auth-status` walks six gates in order and stops at the first failure:
 
-## 4. Smoke-test the CLI
+1. gcloud installed
+2. ADC credentials present
+3. Gmail scope granted
+4. Quota project set
+5. Gmail API enabled on quota project
+6. Live API call (`getProfile`) succeeds
 
-```bash
-node bin/gmail-cli.js whoami
-node bin/gmail-cli.js list-messages --q "is:unread" --max 5
-```
+The fix command for each failure prints inline. Common ones:
 
-## 5. Register the MCP with Claude Code
+- **No quota project:** `gcloud auth application-default set-quota-project $(gcloud config get-value project)`
+- **Gmail API not enabled:** `gcloud services enable gmail.googleapis.com`
+
+## Register the MCP
 
 ```bash
 claude mcp add gmail-max -- node /Users/ml/Webdev/gmail-mcp/bin/gmail-mcp.js
 ```
 
-Restart Claude Code (or this session). Tools will appear as `mcp__gmail-max__*`.
+Restart Claude Code (or end this session and start a new one). Tools surface as `mcp__gmail-max__*`.
+
+## Adding new scopes later
+
+If a future capability needs a scope beyond `https://mail.google.com/`, update `SCOPES` in `lib/auth.js` AND re-run with the FULL scope list (gcloud overwrites, doesn't append):
+
+```bash
+gcloud auth application-default login --scopes=https://mail.google.com/,<new scope>
+```
+
+## Advanced: Push notifications (`watch`)
+
+Gmail's push-notification feature requires a Cloud Pub/Sub topic and an IAM grant for `gmail-api-push@system.gserviceaccount.com`. Out of scope for this setup. Use `gcloud pubsub topics create` and follow the [Gmail push docs](https://developers.google.com/workspace/gmail/api/guides/push) when you actually need it.
 
 ## Troubleshooting
 
-- **invalid_grant on auth flow**: make sure your Gmail address is added as a test user on the OAuth consent screen.
-- **Token cached in non-interactive context**: `~/.gmail-mcp/token.json`; delete it and re-run `auth` if you ever change scopes.
-- **Quota**: 1B units/day, 250 units/user/sec. Effectively unbounded for personal use.
+- **Quota / billing warnings:** `auth-status` shows your quota project. If it differs from `gcloud config get-value project`, that's usually fine — they can legitimately differ. The flag is informational.
+- **403 PERMISSION_DENIED on first call:** Gmail API isn't enabled on your quota project. Run `gcloud services enable gmail.googleapis.com`.
+- **401 UNAUTHENTICATED:** ADC token revoked, expired, or scope mismatch. Re-run `gcloud auth application-default login --scopes=https://mail.google.com/`.
+- **Quota:** 1B units/day, 250 units/user/sec. Effectively unbounded for personal use.
