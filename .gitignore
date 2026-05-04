@@ -1,7 +1,10 @@
 node_modules/
 *.log
 .DS_Store
-# never commit credential drops or local profile cache
+# never commit OAuth client credentials, token cache, or profile cache
+credentials.json
+token.json
+profile.json
+client_secret*.json
 *.pem
 *.p12
-profile.json

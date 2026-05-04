@@ -2,8 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { adcPath, SCOPES } from '../lib/auth.js';
+import {
+  runAuthFlow,
+  CREDENTIALS_PATH,
+  TOKEN_PATH,
+  SCOPES,
+} from '../lib/auth.js';
 import * as G from '../lib/gmail.js';
 
 const PROFILE_CACHE = path.join(os.homedir(), '.gmail-mcp', 'profile.json');
@@ -13,7 +17,8 @@ function usage() {
   console.error(`gmail-cli <command> [--json '<obj>'] [--<flag> <val>...]
 
 Auth:
-  auth-status                       Diagnose ADC setup; print fix command for any failure
+  auth                              Run OAuth desktop flow (one-time, opens browser)
+  auth-status                       Diagnose OAuth setup; print fix command for any failure
   whoami                            Print profile + email address (cached)
 
 Messages:
@@ -99,68 +104,18 @@ Common:
   --raw            Print raw JSON without indent
 
 Paths:
-  ADC credentials: ${adcPath()}
-  Profile cache:   ${PROFILE_CACHE}
+  OAuth client:  ${CREDENTIALS_PATH}
+  Token cache:   ${TOKEN_PATH}
+  Profile cache: ${PROFILE_CACHE}
 `);
 }
 
-function which(cmd) {
-  try {
-    return execFileSync('which', [cmd], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function gcloudVersion() {
-  try {
-    return execFileSync('gcloud', ['--version'], { encoding: 'utf8' })
-      .split('\n')[0]
-      .trim();
-  } catch {
-    return null;
-  }
-}
-
-function gcloudConfig(key) {
-  try {
-    const v = execFileSync('gcloud', ['config', 'get-value', key], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return v && v !== '(unset)' ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-function readAdcFile() {
-  const p = adcPath();
+function readJsonFile(p) {
   if (!fs.existsSync(p)) return null;
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
     return null;
-  }
-}
-
-function gmailApiEnabled(project) {
-  try {
-    const out = execFileSync(
-      'gcloud',
-      [
-        'services',
-        'list',
-        '--enabled',
-        '--filter=config.name=gmail.googleapis.com',
-        '--format=value(config.name)',
-        ...(project ? [`--project=${project}`] : []),
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-    ).trim();
-    return out.includes('gmail.googleapis.com');
-  } catch {
-    return null; // unknown — gcloud failed (no project, no auth, etc.)
   }
 }
 
@@ -197,75 +152,46 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
     if (!ok && !firstFailure) firstFailure = entry;
   }
 
-  // 1. gcloud installed?
-  const gPath = which('gcloud');
-  if (!gPath) {
-    record(false, 'gcloud installed', 'not found in PATH',
-      'brew install --cask gcloud-cli');
+  // 1. OAuth client credentials present?
+  const creds = readJsonFile(CREDENTIALS_PATH);
+  if (!creds) {
+    record(false, 'OAuth client credentials', `missing at ${CREDENTIALS_PATH}`,
+      'See SETUP.md — create a Desktop OAuth client in Cloud Console, drop client_secret_*.json at this path');
   } else {
-    record(true, 'gcloud installed', gcloudVersion() || gPath, null);
-  }
-
-  // 2. ADC file present?
-  const adc = readAdcFile();
-  if (!adc) {
-    record(false, 'ADC credentials present', adcPath(),
-      `gcloud auth application-default login --scopes=${SCOPES.join(',')}`);
-  } else {
-    record(true, 'ADC credentials present', adcPath(), null);
-  }
-
-  // 3. ADC has Gmail scope (best-effort: many ADC files don't store scopes,
-  //    so we don't fail this — just inform). The live API call (#6) is the
-  //    real test.
-  if (adc) {
-    const scopes = adc.scopes || adc.granted_scopes || null;
-    if (Array.isArray(scopes)) {
-      const hasGmail = scopes.some((s) => s === 'https://mail.google.com/' ||
-        s.startsWith('https://www.googleapis.com/auth/gmail'));
-      record(
-        hasGmail,
-        'Gmail scope granted',
-        scopes.join(' '),
-        hasGmail
-          ? null
-          : `gcloud auth application-default login --scopes=${SCOPES.join(',')}`
-      );
+    const block = creds.installed || creds.web;
+    if (!block || !block.client_id) {
+      record(false, 'OAuth client credentials', 'malformed (no installed/web block)',
+        'Re-download the JSON from Cloud Console; ensure it is a Desktop OAuth client');
     } else {
-      record(true, 'Gmail scope granted', 'not introspectable in ADC file (will verify via live call)', null);
+      record(true, 'OAuth client credentials', `${block.client_id.slice(0, 24)}…`, null);
     }
   }
 
-  // 4. Quota project
-  const quotaProject = adc?.quota_project_id || null;
-  const gcloudProject = gPath ? gcloudConfig('project') : null;
-  if (quotaProject) {
-    record(true, 'Quota project (ADC)', quotaProject, null);
-    if (gcloudProject && gcloudProject !== quotaProject) {
-      record(true, 'gcloud config project',
-        `${gcloudProject} (differs from ADC quota project — usually fine, flagged for awareness)`,
-        null);
-    }
+  // 2. Token cache present?
+  const token = readJsonFile(TOKEN_PATH);
+  if (!token) {
+    record(false, 'Token cached', `missing at ${TOKEN_PATH}`,
+      'node bin/gmail-cli.js auth');
+  } else if (!token.refresh_token) {
+    record(false, 'Token cached', 'no refresh_token (consent not run with prompt=consent)',
+      'rm ' + TOKEN_PATH + ' && node bin/gmail-cli.js auth');
   } else {
-    record(false, 'Quota project (ADC)', 'unset',
-      `gcloud auth application-default set-quota-project ${gcloudProject || '<PROJECT_ID>'}`);
+    record(true, 'Token cached', `refresh_token present, scope=${token.scope || '(unknown)'}`, null);
   }
 
-  // 5. Gmail API enabled on quota project
-  const project = quotaProject || gcloudProject;
-  if (gPath && project) {
-    const enabled = gmailApiEnabled(project);
-    if (enabled === true) {
-      record(true, 'Gmail API enabled', `gmail.googleapis.com on ${project}`, null);
-    } else if (enabled === false) {
-      record(false, 'Gmail API enabled', `not enabled on ${project}`,
-        `gcloud services enable gmail.googleapis.com --project=${project}`);
+  // 3. Token has Gmail scope?
+  if (token?.scope) {
+    const hasGmail = token.scope.includes('https://mail.google.com/') ||
+      token.scope.includes('gmail.googleapis.com');
+    if (!hasGmail) {
+      record(false, 'Gmail scope granted', token.scope,
+        'rm ' + TOKEN_PATH + ' && node bin/gmail-cli.js auth');
     } else {
-      record(true, 'Gmail API enabled', 'unknown (gcloud check failed; will verify via live call)', null);
+      record(true, 'Gmail scope granted', SCOPES.join(' '), null);
     }
   }
 
-  // 6. Live call (only if no prior failure)
+  // 4. Live call (only if no prior failure)
   if (!firstFailure) {
     try {
       const profile = await G.getProfile();
@@ -381,6 +307,10 @@ async function main() {
 
   try {
     switch (cmd) {
+      case 'auth':
+        await runAuthFlow();
+        out({ ok: true, savedTo: TOKEN_PATH });
+        break;
       case 'auth-status': {
         const wantJson = f.json === true || f.raw === true;
         const result = await runAuthStatus({ json: wantJson });
