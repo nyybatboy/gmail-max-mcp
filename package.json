@@ -1,12 +1,12 @@
 {
-  "name": "gmail-mcp",
-  "version": "0.4.0",
+  "name": "gmail-max-mcp",
+  "version": "0.4.2",
   "description": "Full Gmail API surface as an MCP server (~55 tools): send, drafts with attachments, threaded reply drafts, labels, filters, settings (vacation/signatures/forwarding/delegates/IMAP/POP/S-MIME), watch, history. Auth: OAuth 2.0 desktop flow with your own Cloud Console OAuth client.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nyybatboy/gmail-mcp.git"
+    "url": "https://github.com/nyybatboy/gmail-max-mcp.git"
   },
   "keywords": [
     "gmail",

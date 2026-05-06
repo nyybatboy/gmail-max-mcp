@@ -214,7 +214,7 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
 
   // Pretty print
   const lines = [];
-  lines.push('gmail-mcp auth-status');
+  lines.push('gmail-max-mcp auth-status');
   lines.push('─'.repeat(34));
   for (const c of checks) {
     const tag = c.ok ? '[ok]  ' : '[FAIL]';

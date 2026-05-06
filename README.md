@@ -1,4 +1,4 @@
-# gmail-mcp
+# gmail-max-mcp
 
 The full Gmail API surface as an MCP server (~55 tools). Install this when the default Gmail MCP your client ships with stops at search/read/send and you need threaded reply drafts, attachments on drafts, filters, signatures, vacation, forwarding, delegates, S/MIME, history, or watch.
 
@@ -30,7 +30,7 @@ node bin/gmail-cli.js whoami             # confirm
 Register with your MCP client (Claude Code example):
 
 ```bash
-claude mcp add gmail-max -- node /absolute/path/to/gmail-mcp/bin/gmail-mcp.js
+claude mcp add gmail-max -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.js
 ```
 
 After registration, tools surface as `mcp__gmail-max__*` (or your chosen name's prefix).

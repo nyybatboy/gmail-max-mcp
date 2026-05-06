@@ -10,18 +10,18 @@ The standard workaround for personal use: **you create your own OAuth client**, 
 
 ## 1. Create a Google Cloud OAuth desktop client
 
-1. Go to <https://console.cloud.google.com/projectcreate> — create a project (any name, e.g. `gmail-mcp`).
+1. Go to <https://console.cloud.google.com/projectcreate> — create a project (any name, e.g. `gmail-max-mcp`).
 2. With that project selected, enable the Gmail API: <https://console.cloud.google.com/apis/library/gmail.googleapis.com> → **Enable**.
 3. Configure the OAuth consent screen at <https://console.cloud.google.com/apis/credentials/consent>.
    - User type: **External**
-   - App name: anything (e.g. `gmail-mcp`)
+   - App name: anything (e.g. `gmail-max-mcp`)
    - User support email + developer email: your email
    - **Save.**
    - Under **Test users**, add your own Gmail address. The app stays in "Testing" status indefinitely; refresh tokens won't expire as long as you're a listed test user.
 4. Create credentials at <https://console.cloud.google.com/apis/credentials>.
    - **Create Credentials → OAuth client ID**
    - Application type: **Desktop app**
-   - Name: `gmail-mcp`
+   - Name: `gmail-max-mcp`
    - **Create**, then **Download JSON**.
 
 ## 2. Drop the credentials and authorize
@@ -31,12 +31,12 @@ mkdir -p ~/.gmail-mcp && chmod 700 ~/.gmail-mcp
 mv ~/Downloads/client_secret_*.json ~/.gmail-mcp/credentials.json
 chmod 600 ~/.gmail-mcp/credentials.json
 
-cd /path/to/gmail-mcp
+cd /path/to/gmail-max-mcp
 npm install
 node bin/gmail-cli.js auth
 ```
 
-A browser tab opens. Sign in to your Gmail account, accept the consent. You'll see "Google hasn't verified this app" — that's expected for a personal-use Desktop client; click **Advanced → Go to gmail-mcp**. The CLI captures the redirect, writes the refresh token to `~/.gmail-mcp/token.json`, and exits.
+A browser tab opens. Sign in to your Gmail account, accept the consent. You'll see "Google hasn't verified this app" — that's expected for a personal-use Desktop client; click **Advanced → Go to gmail-max-mcp**. The CLI captures the redirect, writes the refresh token to `~/.gmail-mcp/token.json`, and exits.
 
 ## 3. Verify
 
@@ -56,7 +56,7 @@ node bin/gmail-cli.js list-messages --q "is:unread" --max 5
 ## 4. Register the MCP
 
 ```bash
-claude mcp add gmail-max -- node /absolute/path/to/gmail-mcp/bin/gmail-mcp.js
+claude mcp add gmail-max -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.js
 ```
 
 Restart Claude Code (or end this session and start a new one). Tools surface as `mcp__gmail-max__*`.
