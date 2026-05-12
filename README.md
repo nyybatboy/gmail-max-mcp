@@ -197,11 +197,13 @@ The blast radius if the OAuth refresh token is exfiltrated or the agent is promp
 
 ### Why the spicy auth path
 
-Gmail's full-access scope (`https://mail.google.com/`) is classified by Google as a **restricted scope** — separate, stricter tier from "sensitive." Restricted scopes require the OAuth app to be verified specifically for that scope (a CASA security review, weeks-to-months process).
+Gmail's full-access scope (`https://mail.google.com/`) is classified by Google as a **restricted scope**, a separate and stricter tier from "sensitive." Restricted scopes require the OAuth app to be verified specifically for that scope (a CASA security review, weeks-to-months process).
 
-`gcloud`'s pre-built OAuth client (the easy "Application Default Credentials" path) cannot grant Gmail's restricted scopes — Google's policy hard-blocks it. The standard pattern for personal-use desktop apps: **you create your own OAuth client**, list yourself as a test user on the consent screen, the app stays in "Testing" mode forever, and Google allows full Gmail access for test users without verification.
+`gcloud`'s pre-built OAuth client (the easy "Application Default Credentials" path) cannot grant Gmail's restricted scopes. Google's policy hard-blocks it. The standard pattern for personal-use desktop apps: **you create your own OAuth client and publish the consent screen to "In production" status without submitting for verification.** Google's documented <100-user personal-use exemption permits this (support.google.com/cloud/answer/15549945). Refresh tokens issued under Production status have no expiry.
 
-This means: the OAuth client you create belongs to you, sits in a Cloud Console project you own, and the consent flow shows "Google hasn't verified this app" — that's expected and is the price of skipping the verification process. See SETUP.md.
+Do not leave the app in "Testing" publishing status. Testing-mode refresh tokens expire after 7 days regardless of test-user listing (support.google.com/cloud/answer/13464323), which produces a weekly `invalid_grant` failure mode.
+
+This means: the OAuth client you create belongs to you, sits in a Cloud Console project you own, and the first-run consent flow shows a "Google hasn't verified this app" warning. Click **Advanced > Go to {app-name} (unsafe)** to proceed. That warning is the single user-visible cost of the exemption path. See SETUP.md for the full walkthrough.
 
 ### Local data layout
 
