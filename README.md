@@ -7,7 +7,7 @@ The full Gmail API surface as an MCP server (~55 tools). Install this when the d
 ```
 lib/
   auth.js   OAuth 2.0 desktop flow + token cache + error mappers
-  mime.js   multipart MIME builder (attachments + threaded reply headers)
+  mime.js   multipart MIME builder (attachments + threaded reply headers + plaintext->HTML rendering)
   gmail.js  thin wrappers over googleapis (~50 fns) wrapped in an
             error-mapping safe() wrapper so 403/401 surface with fix-it lines
 bin/
@@ -48,7 +48,7 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 - **`list_messages`** — `{ q?, labelIds?, maxResults?, pageToken?, includeSpamTrash? }` → `{ messages: [{id, threadId}], resultSizeEstimate, nextPageToken? }`. `q` uses Gmail search syntax: `from:`, `to:`, `subject:`, `has:attachment`, `newer_than:7d`, `is:unread`, label names, etc.
 - **`get_message`** — `{ id, format?: "full"|"metadata"|"minimal"|"raw", metadataHeaders? }` → full message including parsed payload tree.
 - **`batch_get_messages`** — `{ ids: [...], format?, metadataHeaders?, concurrency?: 10 }` → `{ messages: [...], errors: [{id, error}] }`. Use this instead of looping `get_message` — one tool call instead of N round-trips for the agent. `Promise.allSettled` so one failure doesn't kill the batch.
-- **`send_message`** — `{ to, cc?, bcc?, from?, replyTo?, subject?, text?, html?, attachments?, inReplyTo?, references?, threadId?, headers? }` → sent message id. See "Address shape" and "Attachment shape" below.
+- **`send_message`** — `{ to, cc?, bcc?, from?, replyTo?, subject?, text?, html?, plaintextOnly?, attachments?, inReplyTo?, references?, threadId?, headers? }` → sent message id. A text-only body is auto-rendered to `multipart/alternative` (Gmail-style HTML + plain-text fallback) — see "Email body rendering" below. See also "Address shape" and "Attachment shape".
 - **`modify_message`** — `{ id, addLabelIds?: [...], removeLabelIds?: [...] }`.
 - **`batch_modify_messages`** — `{ ids, addLabelIds?, removeLabelIds? }` → `{ ok, count }`.
 - **`batch_delete_messages`** — `{ ids }` → `{ ok, count }`. PERMANENT, skips Trash, irreversible.
@@ -60,7 +60,7 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 - **`list_drafts`** — `{ q?, maxResults?, pageToken? }`.
 - **`get_draft`** — `{ id, format? }`.
 - **`create_draft`** — `{ ...same as send_message, useSignature?: true }`. With `useSignature: true` (default) the user's default Gmail signature from send-as is auto-appended (text mode: `\n\n-- \n<sig>`; html mode: `<div class="gmail_signature">...</div>` matching Gmail web UI bytes).
-- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, attachments?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply.
+- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, plaintextOnly?, attachments?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply.
 - **`update_draft`** — `{ id, ...same as create_draft }`. Replaces.
 - **`send_draft`** — `{ id }`.
 - **`delete_draft`** — `{ id }`.
@@ -160,11 +160,13 @@ These are not enforced by the server — they are the conventions an agent shoul
 
 A draft created via `create_draft` with `inReplyTo` and `threadId` set will be linked to the thread, but it will not include the parent body as quoted text — Gmail's API does not auto-quote. The recipient sees a stripped reply with no context. `create_reply_draft` is the correct tool for any threaded reply: it pulls the parent, builds the quoted body in Gmail's exact byte format (so it renders identically to a Gmail web UI reply), and handles signature placement (signature appears between user body and quoted parent, matching Gmail web UI order).
 
-### Email body paragraphs: one line per paragraph
+### Email body rendering: text in, HTML out
 
-Every paragraph in `text` or `html` body fields must be a single continuous line. Use `\n\n` between paragraphs only — never `\n` mid-sentence. Hard breaks inside a sentence render as visible line breaks on mobile clients, making the email look broken.
+A text-only `text` body is automatically rendered into a `multipart/alternative` message: a Gmail-style HTML part (`<div dir="ltr"><div>…</div><div><br></div>…</div>`, matching what Gmail's own web compose emits, so it reflows to the reader's screen) plus the cleaned text as the plain-text fallback, in RFC 2046 order (plain first, HTML last). **You do not need to write HTML** — write the body the way a person types plainly into Gmail compose: one continuous line per paragraph, a blank line (`\n\n`) between paragraphs, a single `\n` only for intentional breaks (address blocks, list items).
 
-If your tool's output is wrapped to ~70 cols by default (a common LLM behavior), strip the wraps before passing to `text`. Same for `html` — if you have `<p>` tags, the text inside each `<p>` should be one continuous line.
+The renderer also heals stray machine hard-wraps: if your tool's output is wrapped to ~70 cols (a common LLM behavior), mid-sentence continuation lines are rejoined automatically so the body does not render as a frozen narrow column. Clean authoring is still preferred (it keeps the plain-text fallback tidy), but it is no longer a hard requirement.
+
+Escape hatches: pass **`html`** to supply your own markup (it overrides the auto-render and sets the HTML part directly; provide `text` too to control the plain fallback). Pass **`plaintextOnly: true`** to send a bare `text/plain` message with no HTML part (mailing lists, code-only mail).
 
 ### Signatures are auto-applied
 
