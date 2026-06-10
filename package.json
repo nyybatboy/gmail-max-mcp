@@ -32,7 +32,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "googleapis": "^144.0.0",
     "open": "^10.1.0"
   }
