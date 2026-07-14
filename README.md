@@ -60,7 +60,7 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 - **`list_drafts`** — `{ q?, maxResults?, pageToken? }`.
 - **`get_draft`** — `{ id, format? }`.
 - **`create_draft`** — `{ ...same as send_message, useSignature?: true }`. With `useSignature: true` (default) the user's default Gmail signature from send-as is auto-appended (text mode: `\n\n-- \n<sig>`; html mode: `<div class="gmail_signature">...</div>` matching Gmail web UI bytes).
-- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, plaintextOnly?, attachments?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply.
+- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, plaintextOnly?, attachments?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply. Addressing follows Gmail: normal parent → `To:` the parent's Reply-To/From, `replyAll` adds the parent's To+Cc; a **self-sent parent** (parent From is your account or any send-as alias) → `To:` the parent's original recipients, `replyAll` carries the parent's Cc. Your own account and aliases are never a recipient of your own reply.
 - **`update_draft`** — `{ id, ...same as create_draft }`. Replaces.
 - **`send_draft`** — `{ id }`.
 - **`delete_draft`** — `{ id }`.
@@ -159,6 +159,8 @@ These are not enforced by the server — they are the conventions an agent shoul
 ### Reply drafts: use `create_reply_draft`, not `create_draft`
 
 A draft created via `create_draft` with `inReplyTo` and `threadId` set will be linked to the thread, but it will not include the parent body as quoted text — Gmail's API does not auto-quote. The recipient sees a stripped reply with no context. `create_reply_draft` is the correct tool for any threaded reply: it pulls the parent, builds the quoted body in Gmail's exact byte format (so it renders identically to a Gmail web UI reply), and handles signature placement (signature appears between user body and quoted parent, matching Gmail web UI order).
+
+**Addressing a reply to your own message.** Replying to a message you sent yourself (e.g. bumping a thread) does not address the reply back to you. When the parent's `From` is your authenticated account or any send-as alias, `create_reply_draft` addresses `To:` the parent's original recipients and, on `replyAll`, carries the parent's `Cc`. Your own account and aliases are filtered out of every recipient field of your own reply, and `Cc` is de-duped against `To`. For a parent from someone else the behavior is standard: `To:` the parent's Reply-To/From, and `replyAll` adds the parent's To+Cc (minus you).
 
 ### Email body rendering: text in, HTML out
 
