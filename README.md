@@ -35,6 +35,16 @@ claude mcp add gmail-max -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.j
 
 After registration, tools surface as `mcp__gmail-max__*` (or your chosen name's prefix).
 
+**Multiple accounts:** set `GMAIL_MCP_CONFIG_DIR` to point a second registration at its own
+credentials/token/profile cache (default `~/.gmail-mcp`). Same OAuth client can be reused —
+copy `credentials.json` into the new dir and run `auth` there:
+
+```bash
+mkdir -m 700 ~/.gmail-mcp-second && cp ~/.gmail-mcp/credentials.json ~/.gmail-mcp-second/
+GMAIL_MCP_CONFIG_DIR=~/.gmail-mcp-second node bin/gmail-cli.js auth
+claude mcp add gmail-second -e GMAIL_MCP_CONFIG_DIR=$HOME/.gmail-mcp-second -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.js
+```
+
 ## Tool catalog
 
 All tools accept JSON arguments matching their declared input schema. Names below are the MCP tool names. The CLI exposes the same surface with kebab-case subcommands; `node bin/gmail-cli.js --help` prints the full mapping.

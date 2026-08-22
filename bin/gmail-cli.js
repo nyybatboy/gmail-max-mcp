@@ -4,13 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   runAuthFlow,
+  CONFIG_DIR,
   CREDENTIALS_PATH,
   TOKEN_PATH,
   SCOPES,
 } from '../lib/auth.js';
 import * as G from '../lib/gmail.js';
 
-const PROFILE_CACHE = path.join(os.homedir(), '.gmail-mcp', 'profile.json');
+const PROFILE_CACHE = path.join(CONFIG_DIR, 'profile.json');
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function usage() {
