@@ -26,6 +26,17 @@ const ATTACHMENT = {
   },
 };
 
+const INLINE_IMAGE = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: 'Local image file path.' },
+    filename: { type: 'string' },
+    mimeType: { type: 'string' },
+    contentBase64: { type: 'string', description: 'Base64 image data if no path.' },
+    cid: { type: 'string', description: 'Content-ID (without angle brackets). Reference in HTML as src="cid:<value>".' },
+  },
+};
+
 const MESSAGE_BODY = {
   type: 'object',
   properties: {
@@ -39,6 +50,7 @@ const MESSAGE_BODY = {
     html: { type: 'string', description: 'Optional explicit HTML body. Supply this ONLY when you deliberately want custom HTML; it overrides the automatic rendering of `text`. Provide both text and html to set the plain fallback yourself.' },
     plaintextOnly: { type: 'boolean', description: 'Set true to send a bare text/plain message with no HTML part (e.g. mailing lists, code-only mail). Default false: a text-only body auto-renders to multipart/alternative.' },
     attachments: { type: 'array', items: ATTACHMENT },
+    inlineImages: { type: 'array', items: INLINE_IMAGE, description: 'Inline images embedded via Content-ID. Each needs a cid; reference in your HTML as <img src="cid:mycid">. Wraps the body in multipart/related.' },
     inReplyTo: { type: 'string', description: 'Message-Id of parent (for threaded replies)' },
     references: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
     threadId: { type: 'string', description: 'Gmail threadId — required to dock the message into an existing thread' },
@@ -98,7 +110,7 @@ const TOOLS = {
     handler: G.batchGetMessages,
   },
   send_message: {
-    description: 'Send a message. A text-only body auto-renders to a multipart/alternative email (Gmail-style HTML + plain-text fallback); pass html to override, or plaintextOnly:true to force text/plain. Supports To/Cc/Bcc, attachments (path or base64), threaded replies (set inReplyTo, references, threadId).',
+    description: 'Send a message. A text-only body auto-renders to a multipart/alternative email (Gmail-style HTML + plain-text fallback); pass html to override, or plaintextOnly:true to force text/plain. Supports To/Cc/Bcc, attachments (path or base64), inline images (Content-ID; reference as src="cid:..."), threaded replies (set inReplyTo, references, threadId).',
     inputSchema: MESSAGE_BODY,
     handler: G.sendMessage,
   },
@@ -183,6 +195,7 @@ const TOOLS = {
         html:        { type: 'string', description: 'Optional explicit HTML body; overrides the automatic rendering of `body`.' },
         plaintextOnly: { type: 'boolean', description: 'Force a bare text/plain reply (no HTML part). Default false.' },
         attachments: { type: 'array', items: ATTACHMENT },
+        inlineImages: { type: 'array', items: INLINE_IMAGE, description: 'Inline images via Content-ID. Reference in html as <img src="cid:mycid">.' },
         extraTo:  ADDR,
         extraCc:  ADDR,
         extraBcc: ADDR,

@@ -26,7 +26,7 @@ Messages:
   list-messages    --q <query> --max <n> --label <id>...
   get-message      --id <id> [--format full|metadata|minimal|raw]
   batch-get-messages --json '{"ids":[...],"format":"full","concurrency":10}'
-  send             --json '{"to":"...","subject":"...","text":"...","attachments":[{"path":"..."}]}'
+  send             --json '{"to":"...","subject":"...","text":"...","attachments":[{"path":"..."}],"inlineImages":[{"path":"...","cid":"img1"}]}'
   modify-message   --id <id> --add <label>... --remove <label>...
   batch-modify     --json '{"ids":[...],"addLabelIds":[...],"removeLabelIds":[...]}'
   batch-delete     --json '{"ids":[...]}'

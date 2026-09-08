@@ -57,3 +57,43 @@ test('threaded reply headers survive auto-render', () => {
   assert.match(raw, /References: <root@mail> <parent@mail>/);
   assert.match(raw, /multipart\/alternative/);
 });
+
+test('inline images produce multipart/related wrapping multipart/alternative', () => {
+  const pixel = Buffer.from([0x89, 0x50, 0x4E, 0x47]).toString('base64');
+  const raw = decode(buildRawMessage({
+    to: 'a@b.com', subject: 'x',
+    html: '<p>See <img src="cid:logo"></p>', text: 'See logo',
+    inlineImages: [{ filename: 'logo.png', contentBase64: pixel, mimeType: 'image/png', cid: 'logo' }],
+  }));
+  assert.match(raw, /Content-Type: multipart\/related/);
+  assert.match(raw, /Content-Type: multipart\/alternative/);
+  assert.match(raw, /Content-ID: <logo>/);
+  assert.match(raw, /Content-Disposition: inline; filename="logo.png"/);
+  assert.doesNotMatch(raw, /multipart\/mixed/, 'no mixed wrapper without attachments');
+});
+
+test('inline images + attachments produce mixed > related > alternative', () => {
+  const pixel = Buffer.from([0x89, 0x50]).toString('base64');
+  const raw = decode(buildRawMessage({
+    to: 'a@b.com', subject: 'x',
+    html: '<p><img src="cid:pic1"></p>', text: 'alt text',
+    inlineImages: [{ filename: 'pic.png', contentBase64: pixel, mimeType: 'image/png', cid: 'pic1' }],
+    attachments: [{ filename: 'doc.pdf', contentBase64: Buffer.from('pdf').toString('base64'), mimeType: 'application/pdf' }],
+  }));
+  assert.match(raw, /Content-Type: multipart\/mixed/);
+  assert.match(raw, /Content-Type: multipart\/related/);
+  assert.match(raw, /Content-Type: multipart\/alternative/);
+  assert.match(raw, /Content-ID: <pic1>/);
+  assert.match(raw, /Content-Disposition: inline; filename="pic.png"/);
+  assert.match(raw, /Content-Disposition: attachment; filename="doc.pdf"/);
+});
+
+test('inline image cid is auto-generated when omitted', () => {
+  const pixel = Buffer.from([0xFF, 0xD8]).toString('base64');
+  const raw = decode(buildRawMessage({
+    to: 'a@b.com', subject: 'x',
+    html: '<p>img</p>', text: 'img',
+    inlineImages: [{ filename: 'photo.jpg', contentBase64: pixel, mimeType: 'image/jpeg' }],
+  }));
+  assert.match(raw, /Content-ID: <[0-9a-f]+>/);
+});

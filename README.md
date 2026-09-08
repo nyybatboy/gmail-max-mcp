@@ -58,7 +58,7 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 - **`list_messages`** — `{ q?, labelIds?, maxResults?, pageToken?, includeSpamTrash? }` → `{ messages: [{id, threadId}], resultSizeEstimate, nextPageToken? }`. `q` uses Gmail search syntax: `from:`, `to:`, `subject:`, `has:attachment`, `newer_than:7d`, `is:unread`, label names, etc.
 - **`get_message`** — `{ id, format?: "full"|"metadata"|"minimal"|"raw", metadataHeaders? }` → full message including parsed payload tree.
 - **`batch_get_messages`** — `{ ids: [...], format?, metadataHeaders?, concurrency?: 10 }` → `{ messages: [...], errors: [{id, error}] }`. Use this instead of looping `get_message` — one tool call instead of N round-trips for the agent. `Promise.allSettled` so one failure doesn't kill the batch.
-- **`send_message`** — `{ to, cc?, bcc?, from?, replyTo?, subject?, text?, html?, plaintextOnly?, attachments?, inReplyTo?, references?, threadId?, headers? }` → sent message id. A text-only body is auto-rendered to `multipart/alternative` (Gmail-style HTML + plain-text fallback) — see "Email body rendering" below. See also "Address shape" and "Attachment shape".
+- **`send_message`** — `{ to, cc?, bcc?, from?, replyTo?, subject?, text?, html?, plaintextOnly?, attachments?, inlineImages?, inReplyTo?, references?, threadId?, headers? }` → sent message id. A text-only body is auto-rendered to `multipart/alternative` (Gmail-style HTML + plain-text fallback) — see "Email body rendering" below. See also "Address shape", "Attachment shape", and "Inline images".
 - **`modify_message`** — `{ id, addLabelIds?: [...], removeLabelIds?: [...] }`.
 - **`batch_modify_messages`** — `{ ids, addLabelIds?, removeLabelIds? }` → `{ ok, count }`.
 - **`batch_delete_messages`** — `{ ids }` → `{ ok, count }`. PERMANENT, skips Trash, irreversible.
@@ -70,7 +70,7 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 - **`list_drafts`** — `{ q?, maxResults?, pageToken? }`.
 - **`get_draft`** — `{ id, format? }`.
 - **`create_draft`** — `{ ...same as send_message, useSignature?: true }`. With `useSignature: true` (default) the user's default Gmail signature from send-as is auto-appended (text mode: `\n\n-- \n<sig>`; html mode: `<div class="gmail_signature">...</div>` matching Gmail web UI bytes).
-- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, plaintextOnly?, attachments?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply. Addressing follows Gmail: normal parent → `To:` the parent's Reply-To/From, `replyAll` adds the parent's To+Cc; a **self-sent parent** (parent From is your account or any send-as alias) → `To:` the parent's original recipients, `replyAll` carries the parent's Cc. Your own account and aliases are never a recipient of your own reply.
+- **`create_reply_draft`** — `{ toMessageId, replyAll?: false, body?, html?, plaintextOnly?, attachments?, inlineImages?, extraTo?, extraCc?, extraBcc?, fromAlias?, includeQuotedParent?: true, useSignature?: true }`. **The one the typical default Gmail MCP cannot do.** Pulls In-Reply-To, References, threadId, and `Re:` subject from the parent so the draft docks into the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (`gmail_quote` / `gmail_attr` / `blockquote` markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply. Addressing follows Gmail: normal parent → `To:` the parent's Reply-To/From, `replyAll` adds the parent's To+Cc; a **self-sent parent** (parent From is your account or any send-as alias) → `To:` the parent's original recipients, `replyAll` carries the parent's Cc. Your own account and aliases are never a recipient of your own reply.
 - **`update_draft`** — `{ id, ...same as create_draft }`. Replaces.
 - **`send_draft`** — `{ id }`.
 - **`delete_draft`** — `{ id }`.
@@ -161,6 +161,24 @@ Non-ASCII display names are auto-encoded as RFC 2047 encoded-words.
 ```
 
 MIME type is guessed from extension if `path` is provided and `mimeType` is omitted.
+
+## Inline images
+
+Embed images directly in the email body via `Content-ID` references. Supply `inlineImages` alongside an `html` body that references them with `cid:` URIs:
+
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "Report with chart",
+  "html": "<p>See chart:</p><img src=\"cid:chart1\">",
+  "text": "See chart (image attached inline).",
+  "inlineImages": [
+    { "path": "/path/to/chart.png", "cid": "chart1" }
+  ]
+}
+```
+
+Each entry has the same shape as an attachment (`path` or `contentBase64` + `filename` + `mimeType`) plus a `cid` field. If `cid` is omitted one is auto-generated, but supplying it is strongly recommended so your HTML can reference it. The MIME structure is `multipart/related` wrapping `multipart/alternative`; if regular `attachments` are also present, the outer layer is `multipart/mixed`.
 
 ## Conventions for agent callers
 
