@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
+import { confirm } from '../lib/prompt.js';
 import {
   runAuthFlow,
   CONFIG_DIR,
@@ -351,22 +351,6 @@ function toolForCommand(cmd) {
   return tool;
 }
 
-// Resolves true (y/yes), false (anything else), or null (Ctrl-D / closed input).
-async function confirmOnTty(message) {
-  process.stderr.write(`${message}\n\nProceed? [y/N] `);
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const answer = await new Promise((resolve) => {
-    let done = false;
-    rl.question('', (a) => { done = true; resolve(a); });
-    rl.on('close', () => { if (!done) resolve(null); });
-  });
-  rl.close();
-  if (answer === null) {
-    process.stderr.write('\n');
-    return null;
-  }
-  return /^y(es)?$/i.test(answer.trim());
-}
 
 // Same allow / ask / block rules as the MCP server. "ask" prompts only on an
 // interactive terminal and is refused anywhere else. This is a courtesy check,
@@ -398,7 +382,7 @@ async function enforcePermission({ cmd, account, json, flags, ctx }) {
     outgoing = outgoingFromDraft(draft);
   }
   const message = approvalMessage({ tool, label: account.label, address, outgoing, args: json || flags });
-  const answer = await confirmOnTty(message);
+  const answer = await confirm({ message });
   if (answer === null) throw refuse('no-answer');
   if (!answer) throw refuse('declined');
   if (draft) {

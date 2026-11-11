@@ -37,10 +37,10 @@ export const DEFAULT_MAILBOXES = () => ({
  *              function(request) -> client declares form elicitation and answers with it
  *   askTimeoutMs
  */
-export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), elicit, askTimeoutMs } = {}) {
+export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), elicit, askTimeoutMs, fakeOptions } = {}) {
   const configDir = tempDir();
   writeAccounts(configDir, accounts);
-  const fake = makeFakeGmail(mailboxes);
+  const fake = makeFakeGmail(mailboxes, fakeOptions);
   setGmailClientFactory(fake.factory);
 
   const server = createMultiServer({ configDir, askTimeoutMs });

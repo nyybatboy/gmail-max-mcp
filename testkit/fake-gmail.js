@@ -26,16 +26,39 @@ export function draftPayload({ from, to, subject, text, attachment }) {
   };
 }
 
+export function b64urlDecode(s) {
+  return Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * mailboxes: { [label]: { email, displayName?, messages?: {id: msg}, drafts?: {id: draft} } }
+ * mailboxes: { [label]: { email, displayName?, messages?: {id: msg}, drafts?: {id: draft},
+ *                         attachmentData?: base64 string served by attachments.get } }
+ * options:  { jitter: true } adds a random 0-15 ms delay to every call;
+ *           { mailboxFor: (account) => label } picks the mailbox (default: account.label).
  * Returns { factory, calls, mailboxes }.
  */
-export function makeFakeGmail(mailboxes) {
+export function makeFakeGmail(mailboxes, { jitter = false, mailboxFor } = {}) {
   const calls = [];
   let seq = 0;
 
   function client(account) {
-    const label = account?.label ?? '(single-account)';
+    const c = rawClient(account);
+    if (jitter) {
+      const wrap = (obj) => {
+        for (const [k, v] of Object.entries(obj)) {
+          if (typeof v === 'function') obj[k] = async (...a) => { await sleep(Math.random() * 15); return v(...a); };
+          else if (v && typeof v === 'object') wrap(v);
+        }
+      };
+      wrap(c.users);
+    }
+    return c;
+  }
+
+  function rawClient(account) {
+    const label = mailboxFor ? mailboxFor(account) : (account?.label ?? '(single-account)');
     const box = mailboxes[label];
     if (!box) throw new Error(`fake-gmail: no mailbox for ${label}`);
     box.messages ??= {};
@@ -68,6 +91,9 @@ export function makeFakeGmail(mailboxes) {
             return ok('');
           },
           trash: async (p) => { rec('messages.trash', p); return ok({ id: p.id, labelIds: ['TRASH'] }); },
+          attachments: {
+            get: async (p) => { rec('attachments.get', p); return ok({ data: box.attachmentData ?? '', size: 1 }); },
+          },
         },
         drafts: {
           create: async (p) => {
@@ -81,6 +107,19 @@ export function makeFakeGmail(mailboxes) {
             const d = box.drafts[p.id];
             if (!d) throw notFound(`draft ${p.id}`);
             return ok(d);
+          },
+          // Replaces the draft: new message id, headers parsed from the raw, a marked body.
+          update: async (p) => {
+            rec('drafts.update', p);
+            if (!box.drafts[p.id]) throw notFound(`draft ${p.id}`);
+            const raw = b64urlDecode(p.requestBody.message.raw);
+            const hdr = (n) => (raw.match(new RegExp(`^${n}: (.*)$`, 'mi')) || [])[1];
+            const mid = `m-updated-${p.id}-${++seq}`;
+            box.drafts[p.id] = {
+              id: p.id,
+              message: { id: mid, payload: draftPayload({ from: hdr('From') || box.email, to: hdr('To'), subject: hdr('Subject'), text: 'UPDATED BODY' }) },
+            };
+            return ok({ id: p.id, message: { id: mid } });
           },
           send: async (p) => {
             rec('drafts.send', p);
