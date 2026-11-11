@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import {
   runAuthFlow,
   CONFIG_DIR,
@@ -10,9 +11,27 @@ import {
   SCOPES,
 } from '../lib/auth.js';
 import * as G from '../lib/gmail.js';
+import { runWithAccount } from '../lib/context.js';
+import {
+  accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
+  addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary,
+  groupOf, GROUPS, MAX_ACCOUNTS,
+} from '../lib/accounts.js';
+import {
+  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText,
+} from '../lib/approval.js';
 
 const PROFILE_CACHE = path.join(CONFIG_DIR, 'profile.json');
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Single-account paths. Multi-account commands pass the account's own paths.
+const LEGACY_PATHS = {
+  label: null,
+  credentialsPath: CREDENTIALS_PATH,
+  tokenPath: TOKEN_PATH,
+  profilePath: PROFILE_CACHE,
+};
+const authCmdFor = (paths) => (paths.label ? `node bin/gmail-cli.js auth --account ${paths.label}` : 'node bin/gmail-cli.js auth');
 
 function usage() {
   console.error(`gmail-cli <command> [--json '<obj>'] [--<flag> <val>...]
@@ -106,6 +125,18 @@ Common:
   --pretty         Pretty-print JSON output (default)
   --raw            Print raw JSON without indent
 
+Multiple accounts (up to ${MAX_ACCOUNTS}; on once ${path.join(CONFIG_DIR, 'accounts.json')} exists):
+  accounts list
+  accounts add <label> --purpose "<what this inbox is for>" [--dir <existing folder>] [--no-auth] [--headless]
+  accounts remove <label> [--delete-token]
+  permissions show [<label>]
+  permissions set <label> <group|tool> allow|ask|block
+  permissions clear <label> <group|tool>        Back to the group or built-in default
+  permissions block-all-sends                   One-time: set send to block on every account
+  Groups: ${Object.keys(GROUPS).join(', ')}
+  In multi-account mode every Gmail command needs --account <label> (no default).
+  "ask" prompts in an interactive terminal and refuses otherwise; "block" refuses.
+
 Paths:
   OAuth client:  ${CREDENTIALS_PATH}
   Token cache:   ${TOKEN_PATH}
@@ -122,10 +153,10 @@ function readJsonFile(p) {
   }
 }
 
-function readProfileCache() {
+function readProfileCache(profilePath = PROFILE_CACHE) {
   try {
-    if (!fs.existsSync(PROFILE_CACHE)) return null;
-    const cached = JSON.parse(fs.readFileSync(PROFILE_CACHE, 'utf8'));
+    if (!fs.existsSync(profilePath)) return null;
+    const cached = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
     if (Date.now() - (cached.cachedAt || 0) > PROFILE_TTL_MS) return null;
     return cached;
   } catch {
@@ -133,11 +164,11 @@ function readProfileCache() {
   }
 }
 
-function writeProfileCache(profile) {
+function writeProfileCache(profile, profilePath = PROFILE_CACHE) {
   try {
-    fs.mkdirSync(path.dirname(PROFILE_CACHE), { recursive: true });
+    fs.mkdirSync(path.dirname(profilePath), { recursive: true });
     fs.writeFileSync(
-      PROFILE_CACHE,
+      profilePath,
       JSON.stringify({ ...profile, cachedAt: Date.now() }, null, 2),
       { mode: 0o600 }
     );
@@ -146,7 +177,9 @@ function writeProfileCache(profile) {
   }
 }
 
-async function runAuthStatus({ json: jsonOut = false } = {}) {
+async function runAuthStatus({ json: jsonOut = false, paths = LEGACY_PATHS } = {}) {
+  const { credentialsPath: CREDENTIALS_PATH, tokenPath: TOKEN_PATH, profilePath } = paths;
+  const authCmd = authCmdFor(paths);
   const checks = [];
   let firstFailure = null;
   function record(ok, label, detail, fix) {
@@ -174,10 +207,10 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
   const token = readJsonFile(TOKEN_PATH);
   if (!token) {
     record(false, 'Token cached', `missing at ${TOKEN_PATH}`,
-      'node bin/gmail-cli.js auth');
+      authCmd);
   } else if (!token.refresh_token) {
     record(false, 'Token cached', 'no refresh_token (consent not run with prompt=consent)',
-      'rm ' + TOKEN_PATH + ' && node bin/gmail-cli.js auth');
+      'rm ' + TOKEN_PATH + ' && ' + authCmd);
   } else {
     record(true, 'Token cached', `refresh_token present, scope=${token.scope || '(unknown)'}`, null);
   }
@@ -188,7 +221,7 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
       token.scope.includes('gmail.googleapis.com');
     if (!hasGmail) {
       record(false, 'Gmail scope granted', token.scope,
-        'rm ' + TOKEN_PATH + ' && node bin/gmail-cli.js auth');
+        'rm ' + TOKEN_PATH + ' && ' + authCmd);
     } else {
       record(true, 'Gmail scope granted', SCOPES.join(' '), null);
     }
@@ -198,7 +231,7 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
   if (!firstFailure) {
     try {
       const profile = await G.getProfile();
-      writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId });
+      writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId }, profilePath);
       record(true, 'Live API call (getProfile)',
         `${profile.emailAddress} (historyId=${profile.historyId})`, null);
     } catch (err) {
@@ -215,7 +248,7 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
 
   // Pretty print
   const lines = [];
-  lines.push('gmail-max-mcp auth-status');
+  lines.push(paths.label ? `gmail-max-mcp auth-status (account: ${paths.label})` : 'gmail-max-mcp auth-status');
   lines.push('─'.repeat(34));
   for (const c of checks) {
     const tag = c.ok ? '[ok]  ' : '[FAIL]';
@@ -233,13 +266,13 @@ async function runAuthStatus({ json: jsonOut = false } = {}) {
   process.exit(firstFailure ? 1 : 0);
 }
 
-async function whoamiCached() {
-  const cached = readProfileCache();
+async function whoamiCached(profilePath = PROFILE_CACHE) {
+  const cached = readProfileCache(profilePath);
   if (cached?.email) {
     return { ...cached, fromCache: true };
   }
   const profile = await G.getProfile();
-  writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId });
+  writeProfileCache({ email: profile.emailAddress, historyId: profile.historyId }, profilePath);
   return profile;
 }
 
@@ -282,6 +315,180 @@ function arr(v) {
   return Array.isArray(v) ? v : [v];
 }
 
+// ---------- multi-account support ----------
+
+class CliRefusal extends Error {
+  constructor(payload) {
+    super(payload.reason || payload.error);
+    this.payload = payload;
+  }
+}
+
+// CLI subcommand -> MCP tool name, for permission checks. Most map by
+// replacing "-" with "_"; these four are named differently.
+const CLI_TOOL_EXCEPTIONS = {
+  send: 'send_message',
+  'reply-draft': 'create_reply_draft',
+  'batch-modify': 'batch_modify_messages',
+  'batch-delete': 'batch_delete_messages',
+};
+function toolForCommand(cmd) {
+  if (cmd === 'auth' || cmd === 'auth-status') return null;
+  const tool = CLI_TOOL_EXCEPTIONS[cmd] || cmd.replace(/-/g, '_');
+  return groupOf(tool) ? tool : null;
+}
+
+async function confirmOnTty(message) {
+  process.stderr.write(`${message}\n\nProceed? [y/N] `);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+  const answer = await new Promise((resolve) => rl.question('', resolve));
+  rl.close();
+  return /^y(es)?$/i.test(answer.trim());
+}
+
+// Same allow / ask / block rules as the MCP server. "ask" needs a person at an
+// interactive terminal; anything else (a script, an agent's shell) is refused
+// before any Gmail call is made.
+async function enforcePermission({ cmd, account, json, flags }) {
+  const tool = toolForCommand(cmd);
+  if (!tool) return;
+  const state = resolvePermission(account, tool);
+  if (state === 'allow') return;
+  const draftAllowed = resolvePermission(account, 'create_draft') !== 'block';
+  const refuse = (reason) => new CliRefusal({
+    account: account.label, refused: true, reason: refusalText({ reason, tool, label: account.label, draftAllowed }),
+  });
+  if (state === 'block') throw refuse('blocked');
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw refuse('cannot-ask');
+  let address = null;
+  try { address = (await G.getProfile())?.emailAddress || null; } catch { /* informational */ }
+  let outgoing = null;
+  if (tool === 'send_message') {
+    let from = null;
+    try { from = await G.getDefaultFromAddress(); } catch { /* informational */ }
+    outgoing = outgoingFromArgs(json || {}, from);
+  }
+  if (tool === 'send_draft') outgoing = outgoingFromDraft(await G.getDraft({ id: flags.id, format: 'full' }));
+  const message = approvalMessage({ tool, label: account.label, address, outgoing, args: json || flags });
+  if (!(await confirmOnTty(message))) throw refuse('declined');
+}
+
+function requireLabel(label, what) {
+  if (!label || label === true) throw new Error(`${what} needs an account label.`);
+  return label;
+}
+
+function describeAccount(a) {
+  const p = accountPaths(CONFIG_DIR, a);
+  return {
+    label: a.label,
+    purpose: a.purpose,
+    dir: p.dir,
+    tokenPresent: fs.existsSync(p.tokenPath),
+    oauthClient: p.credentialsPath === path.join(p.dir, 'credentials.json') ? 'own (in account folder)' : 'shared (config directory)',
+    permissions: permissionSummary(a),
+  };
+}
+
+// `accounts ...` and `permissions ...`: manage accounts.json. No Gmail calls,
+// except `accounts add` running the OAuth consent for a new account.
+async function manage(cmd, args) {
+  const [sub, ...rest] = args._;
+  const f = args.flags;
+  const file = accountsFilePath(CONFIG_DIR);
+  const exists = accountsFileExists(CONFIG_DIR);
+  const cfg = exists ? loadAccounts(CONFIG_DIR) : null;
+
+  if (cmd === 'accounts') {
+    if (!sub || sub === 'list') {
+      if (!cfg) return { multiAccount: false, note: `Single-account mode: no ${file}. Add an account with  accounts add <label> --purpose "..."` };
+      return { multiAccount: true, file, accounts: cfg.accounts.map(describeAccount) };
+    }
+    if (sub === 'add') {
+      const label = requireLabel(rest[0], 'accounts add');
+      if (typeof f.purpose !== 'string') throw new Error('accounts add needs --purpose "<what this inbox is for>". The model reads it to choose the account.');
+      const dir = typeof f.dir === 'string' ? path.resolve(f.dir) : undefined;
+      const next = addAccount(cfg, { label, purpose: f.purpose, dir });
+      const entry = findAccount(next, label);
+      const paths = accountPaths(CONFIG_DIR, entry);
+      let adopted = false;
+      let authorized = false;
+      if (fs.existsSync(paths.tokenPath)) {
+        adopted = true;
+      } else if (!f['no-auth']) {
+        await runWithAccount(paths, () => runAuthFlow({ headless: f.headless === true }));
+        authorized = true;
+      }
+      saveAccounts(CONFIG_DIR, next);
+      return {
+        ok: true,
+        account: label,
+        dir: paths.dir,
+        token: adopted ? 'adopted existing token' : authorized ? 'authorized now' : `none yet: run  ${authCmdFor(paths)}`,
+        oauthClient: describeAccount(entry).oauthClient,
+        note: exists ? undefined : `Multi-account mode is now on (${file} created). Restart the MCP server to pick it up; every tool now needs an account argument.`,
+      };
+    }
+    if (sub === 'remove') {
+      const label = requireLabel(rest[0], 'accounts remove');
+      if (!cfg) throw new Error(`No ${file}; nothing to remove.`);
+      const entry = findAccount(cfg, label);
+      if (!entry) throw new Error(`No account "${label}".`);
+      if (cfg.accounts.length === 1) throw new Error(`"${label}" is the last account. To return to single-account mode, delete ${file}.`);
+      saveAccounts(CONFIG_DIR, removeAccount(cfg, label));
+      const deleted = [];
+      if (f['delete-token']) {
+        const p = accountPaths(CONFIG_DIR, entry);
+        for (const file2 of [p.tokenPath, p.profilePath]) {
+          if (fs.existsSync(file2)) { fs.rmSync(file2); deleted.push(file2); }
+        }
+      }
+      return { ok: true, removed: label, deleted };
+    }
+    throw new Error(`Unknown: accounts ${sub}. Use list, add, remove.`);
+  }
+
+  // permissions
+  if (!cfg) throw new Error(`Single-account mode: no ${file}. Add an account first:  accounts add <label> --purpose "..."`);
+  if (!sub || sub === 'show') {
+    const list = rest[0] ? [findAccount(cfg, rest[0])] : cfg.accounts;
+    if (list.includes(null)) throw new Error(`No account "${rest[0]}".`);
+    return {
+      states: { allow: 'runs', ask: 'asks the user first; refused where no one can be asked', block: 'refused' },
+      groups: Object.fromEntries(Object.entries(GROUPS).map(([g, d]) => [g, { default: d.default, description: d.description }])),
+      accounts: list.map((a) => ({ label: a.label, ...permissionSummary(a) })),
+    };
+  }
+  if (sub === 'set') {
+    const [label, key, state] = rest;
+    if (!label || !key || !state) throw new Error('Usage: permissions set <label> <group|tool> allow|ask|block');
+    const next = setPermission(cfg, label, key, state);
+    saveAccounts(CONFIG_DIR, next);
+    return { ok: true, account: label, set: { [key]: state }, permissions: permissionSummary(findAccount(next, label)) };
+  }
+  if (sub === 'clear') {
+    const [label, key] = rest;
+    if (!label || !key) throw new Error('Usage: permissions clear <label> <group|tool>');
+    const entry = findAccount(cfg, label);
+    if (!entry) throw new Error(`No account "${label}".`);
+    const permissions = { ...entry.permissions };
+    delete permissions[key];
+    const next = { version: 1, accounts: cfg.accounts.map((a) => (a.label === label ? { ...a, permissions } : a)) };
+    saveAccounts(CONFIG_DIR, next);
+    return { ok: true, account: label, cleared: key, permissions: permissionSummary(findAccount(next, label)) };
+  }
+  if (sub === 'block-all-sends') {
+    const { cfg: next, changes } = blockAllSends(cfg);
+    saveAccounts(CONFIG_DIR, next);
+    return {
+      ok: true,
+      note: 'One-time action: send is now block on every account. Change any account individually with  permissions set <label> send allow|ask.',
+      changes,
+    };
+  }
+  throw new Error(`Unknown: permissions ${sub}. Use show, set, clear, block-all-sends.`);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') {
@@ -309,14 +516,51 @@ async function main() {
   }
 
   try {
+    if (cmd === 'accounts' || cmd === 'permissions') {
+      out(await manage(cmd, args));
+      return;
+    }
+    if (!accountsFileExists(CONFIG_DIR)) {
+      if (f.account !== undefined) {
+        throw new Error(`--account given, but multi-account mode is off (no ${accountsFilePath(CONFIG_DIR)}). See: accounts add`);
+      }
+      await run(LEGACY_PATHS);
+      return;
+    }
+    const cfg = loadAccounts(CONFIG_DIR);
+    const labels = cfg.accounts.map((a) => a.label).join(', ');
+    if (!f.account || f.account === true) {
+      throw new Error(`--account is required in multi-account mode; there is no default. Choose one of: ${labels}.`);
+    }
+    const account = findAccount(cfg, f.account);
+    if (!account) throw new Error(`Unknown account "${f.account}". Choose one of: ${labels}.`);
+    const paths = accountPaths(CONFIG_DIR, account);
+    await runWithAccount(paths, async () => {
+      await enforcePermission({ cmd, account, json, flags: f });
+      await run(paths);
+    });
+  } catch (err) {
+    if (err instanceof CliRefusal) {
+      process.stderr.write(JSON.stringify(err.payload, null, 2) + '\n');
+      process.exit(1);
+    }
+    process.stderr.write(JSON.stringify({
+      error: err.message,
+      code: err.code,
+      details: err.errors || err.response?.data || null,
+    }, null, 2) + '\n');
+    process.exit(1);
+  }
+
+  async function run(paths) {
     switch (cmd) {
       case 'auth':
         await runAuthFlow();
-        out({ ok: true, savedTo: TOKEN_PATH });
+        out({ ok: true, savedTo: paths.tokenPath });
         break;
       case 'auth-status': {
         const wantJson = f.json === true || f.raw === true;
-        const result = await runAuthStatus({ json: wantJson });
+        const result = await runAuthStatus({ json: wantJson, paths });
         if (wantJson) {
           out(result);
           process.exit(result.ok ? 0 : 1);
@@ -325,7 +569,7 @@ async function main() {
         break;
       }
       case 'whoami':
-        out(f.fresh ? await G.getProfile() : await whoamiCached());
+        out(f.fresh ? await G.getProfile() : await whoamiCached(paths.profilePath));
         break;
 
       // Messages
@@ -479,13 +723,6 @@ async function main() {
         usage();
         process.exit(1);
     }
-  } catch (err) {
-    process.stderr.write(JSON.stringify({
-      error: err.message,
-      code: err.code,
-      details: err.errors || err.response?.data || null,
-    }, null, 2) + '\n');
-    process.exit(1);
   }
 }
 
