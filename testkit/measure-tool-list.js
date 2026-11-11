@@ -31,7 +31,7 @@ const labels = ['personal', 'work', 'family', 'project', 'archive'];
 const legacy = await listedBytes(createLegacyServer());
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-max-measure-'));
 const accounts = {};
-for (let i = 0; i < n; i++) accounts[labels[i]] = { purpose: purposes[i], permissions: i === 0 ? { send: 'ask' } : { send: 'allow' } };
+for (let i = 0; i < n; i++) accounts[labels[i]] = { purpose: purposes[i] };
 fs.writeFileSync(path.join(dir, 'accounts.json'), JSON.stringify({ version: 1, accounts }));
 const multi = await listedBytes(createMultiServer({ configDir: dir }));
 fs.rmSync(dir, { recursive: true, force: true });

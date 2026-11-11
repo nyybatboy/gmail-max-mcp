@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { ElicitRequestSchema, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createMultiServer } from '../lib/server.js';
 import { setGmailClientFactory } from '../lib/gmail.js';
 import { makeFakeGmail } from './fake-gmail.js';
@@ -14,15 +14,15 @@ export function tempDir(prefix = 'gmail-max-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-export function writeAccounts(configDir, accounts, { saveFolders } = {}) {
+export function writeAccounts(configDir, accounts) {
   fs.mkdirSync(configDir, { recursive: true });
-  const data = saveFolders ? { version: 1, saveFolders, accounts } : { version: 1, accounts };
-  fs.writeFileSync(path.join(configDir, 'accounts.json'), JSON.stringify(data, null, 2));
+  fs.writeFileSync(path.join(configDir, 'accounts.json'), JSON.stringify({ version: 1, accounts }, null, 2));
 }
 
+// "work" has sending turned off; "personal" is all defaults (everything on).
 export const DEFAULT_ACCOUNTS = {
-  personal: { purpose: 'Main inbox.', permissions: { send: 'ask' } },
-  work: { purpose: 'Work inbox.', permissions: { send: 'allow' } },
+  personal: { purpose: 'Main inbox.' },
+  work: { purpose: 'Work inbox.', permissions: { send: 'off' } },
 };
 
 export const DEFAULT_MAILBOXES = () => ({
@@ -32,41 +32,39 @@ export const DEFAULT_MAILBOXES = () => ({
 
 /**
  * options:
- *   accounts   accounts.json "accounts" object
- *   mailboxes  fake mailboxes keyed by label
- *   elicit     undefined -> client does NOT declare elicitation;
- *              function(request) -> client declares form elicitation and answers with it
- *   askTimeoutMs
+ *   accounts     accounts.json "accounts" object
+ *   mailboxes    fake mailboxes keyed by label
+ *   fakeOptions  passed to makeFakeGmail (jitter, mailboxFor)
  */
-// saveFolders: always written to accounts.json by the harness (default: a fresh
-// temp folder), so no in-process test ever falls back to the real
-// ~/Downloads/gmail-max of the machine running the tests.
-export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), elicit, askTimeoutMs, fakeOptions, saveFolders } = {}) {
+export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), fakeOptions } = {}) {
   const configDir = tempDir();
-  const saveDir = saveFolders ? null : tempDir('gmail-max-saves-');
-  writeAccounts(configDir, accounts, { saveFolders: saveFolders || [saveDir] });
+  writeAccounts(configDir, accounts);
   const fake = makeFakeGmail(mailboxes, fakeOptions);
   setGmailClientFactory(fake.factory);
 
-  const server = createMultiServer({ configDir, askTimeoutMs });
-  const capabilities = elicit ? { elicitation: { form: {} } } : {};
-  const client = new Client({ name: 'test-client', version: '0.0.0' }, { capabilities });
-  const elicitations = [];
-  if (elicit) {
-    client.setRequestHandler(ElicitRequestSchema, async (req) => {
-      elicitations.push(req.params);
-      return elicit(req.params);
-    });
-  }
+  let server = createMultiServer({ configDir });
+  let client;
   const listChanged = [];
-  client.setNotificationHandler(ToolListChangedNotificationSchema, () => { listChanged.push(Date.now()); });
 
-  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(serverT), client.connect(clientT)]);
+  async function connect() {
+    client = new Client({ name: 'test-client', version: '0.0.0' }, { capabilities: {} });
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => { listChanged.push(Date.now()); });
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverT), client.connect(clientT)]);
+  }
+  await connect();
 
   async function call(name, args) {
     const res = await client.callTool({ name, arguments: args });
     return { isError: !!res.isError, body: parse(res.content[0].text), raw: res };
+  }
+
+  // A fresh server process on the same config directory (as after a restart).
+  async function restart() {
+    await client.close();
+    await server.close();
+    server = createMultiServer({ configDir });
+    await connect();
   }
 
   async function close() {
@@ -74,10 +72,13 @@ export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFA
     await server.close();
     setGmailClientFactory(null);
     fs.rmSync(configDir, { recursive: true, force: true });
-    if (saveDir) fs.rmSync(saveDir, { recursive: true, force: true });
   }
 
-  return { server, client, configDir, saveDir, fake, elicitations, listChanged, call, close };
+  return {
+    get server() { return server; },
+    get client() { return client; },
+    configDir, fake, listChanged, call, restart, close,
+  };
 }
 
 function parse(text) {

@@ -2,8 +2,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { confirm } from '../lib/prompt.js';
-import { draftFingerprint } from '../lib/server.js';
 import {
   runAuthFlow,
   CONFIG_DIR,
@@ -15,13 +13,11 @@ import * as G from '../lib/gmail.js';
 import { runWithAccount } from '../lib/context.js';
 import {
   accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
-  addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary, accountContext,
+  addAccount, removeAccount, setPermission, turnOffAllSends, resolvePermission, permissionSummary, accountContext,
   groupOf, GROUPS, MAX_ACCOUNTS, parseAccounts, serializeAccounts,
-  effectiveSaveFolders, addSaveFolder, removeSaveFolder,
 } from '../lib/accounts.js';
-import {
-  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText, validateComposeArgs,
-} from '../lib/approval.js';
+import { validateComposeArgs, normalizeComposeArgs } from '../lib/compose-checks.js';
+import { offText } from '../lib/server.js';
 
 const PROFILE_CACHE = path.join(CONFIG_DIR, 'profile.json');
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -132,17 +128,11 @@ Multiple accounts (up to ${MAX_ACCOUNTS}; on once ${path.join(CONFIG_DIR, 'accou
   accounts add <label> --purpose "<what this inbox is for>" [--dir <existing folder>] [--no-auth] [--headless]
   accounts remove <label> [--delete-token]
   permissions show [<label>]
-  permissions set <label> <group|tool> allow|ask|block
-  permissions clear <label> <group|tool>        Back to the group or built-in default
-  permissions block-all-sends                   One-time: set send to block on every account
-  save-folders list | add <folder> | remove <folder>
-                                                Where get-attachment may save (default ~/Downloads/gmail-max);
-                                                a relative --save-path goes into the first folder
+  permissions set <label|all> <group|tool> on|off
+  permissions all-sends-off                     One-time: turn sending off on every account
   Groups: ${Object.keys(GROUPS).join(', ')}
+  Everything is on unless turned off. A command that is off for an account is refused.
   In multi-account mode every Gmail command needs --account <label> (no default).
-  "ask" prompts in an interactive terminal and refuses otherwise; "block" refuses.
-  The CLI prompt is a courtesy check, not a barrier: anything with a shell on this
-  machine can edit the accounts file. The MCP server is what guards against the model.
 
 Paths:
   OAuth client:  ${CREDENTIALS_PATH}
@@ -340,7 +330,7 @@ const CLI_TOOL_EXCEPTIONS = {
   'batch-delete': 'batch_delete_messages',
 };
 // Commands that manage accounts.json. No Gmail calls, no JSON input.
-const MANAGE_COMMANDS = new Set(['accounts', 'permissions', 'save-folders']);
+const MANAGE_COMMANDS = new Set(['accounts', 'permissions']);
 
 // Commands that are not Gmail tools and need no permission check.
 const NO_TOOL_COMMANDS = new Set(['auth', 'auth-status']);
@@ -360,45 +350,14 @@ function toolForCommand(cmd) {
 }
 
 
-// Same allow / ask / block rules as the MCP server. "ask" prompts only on an
-// interactive terminal and is refused anywhere else. This is a courtesy check,
-// not a barrier: anything that can run a shell here can already edit the
-// accounts file. The guard against the model's mistakes is the MCP server.
-async function enforcePermission({ cmd, account, json, flags, ctx }) {
+// Same on/off rules and compose checks as the MCP server.
+function enforcePermission({ cmd, account, json, ctx }) {
   const tool = toolForCommand(cmd);
   if (!tool) return;
+  if (resolvePermission(account, tool) !== 'on') {
+    throw new CliRefusal({ account: account.label, refused: true, reason: offText(tool, account.label) });
+  }
   if (COMPOSE_COMMANDS.has(cmd)) validateComposeArgs(json || {}, ctx.protectedRoots);
-  const state = resolvePermission(account, tool);
-  if (state === 'allow') return;
-  const draftAllowed = resolvePermission(account, 'create_draft') !== 'block';
-  const refuse = (reason) => new CliRefusal({
-    account: account.label, refused: true, reason: refusalText({ reason, tool, label: account.label, draftAllowed }),
-  });
-  if (state !== 'ask') throw refuse('blocked');
-  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw refuse('cannot-ask');
-  let address = null;
-  try { address = (await G.getProfile())?.emailAddress || null; } catch { /* informational */ }
-  let outgoing = null;
-  let draft = null;
-  if (tool === 'send_message') {
-    let from = null;
-    try { from = await G.getDefaultFromAddress(); } catch { /* informational */ }
-    outgoing = outgoingFromArgs(json || {}, from);
-  }
-  let approvedRaw = null;
-  if (tool === 'send_draft') {
-    draft = await G.getDraft({ id: flags.id, format: 'full' });
-    approvedRaw = await G.getDraft({ id: flags.id, format: 'raw' });
-    outgoing = outgoingFromDraft(draft);
-  }
-  const message = approvalMessage({ tool, label: account.label, address, outgoing, args: json || flags });
-  const answer = await confirm({ message });
-  if (answer === null) throw refuse('no-answer');
-  if (!answer) throw refuse('declined');
-  if (draft) {
-    const now = await G.getDraft({ id: flags.id, format: 'raw' });
-    if (draftFingerprint(now) !== draftFingerprint(approvedRaw)) throw refuse('changed');
-  }
 }
 
 function requireLabel(label, what) {
@@ -478,69 +437,35 @@ async function manage(cmd, args) {
     throw new Error(`Unknown: accounts ${sub}. Use list, add, remove.`);
   }
 
-  if (cmd === 'save-folders') {
-    if (!cfg) throw new Error(`Single-account mode: no ${file}. Save folders apply only in multi-account mode.`);
-    const show = (c) => ({
-      saveFolders: effectiveSaveFolders(c),
-      source: c.saveFolders?.length ? 'accounts.json' : 'default (no saveFolders key in accounts.json)',
-      note: 'get_attachment saves only inside these folders (create-only); a relative savePath goes into the first one.',
-    });
-    if (!sub || sub === 'list') return show(cfg);
-    const folder = rest[0];
-    if (!folder) throw new Error(`Usage: save-folders ${sub} <absolute folder>`);
-    const abs = folder.startsWith('~') ? folder : path.resolve(folder);
-    if (sub === 'add') {
-      const next = addSaveFolder(cfg, abs);
-      saveAccounts(CONFIG_DIR, next);
-      return { ok: true, added: abs, ...show(next) };
-    }
-    if (sub === 'remove') {
-      const next = removeSaveFolder(cfg, abs);
-      saveAccounts(CONFIG_DIR, next);
-      return { ok: true, removed: abs, ...show(next) };
-    }
-    throw new Error(`Unknown: save-folders ${sub}. Use list, add, remove.`);
-  }
-
   // permissions
   if (!cfg) throw new Error(`Single-account mode: no ${file}. Add an account first:  accounts add <label> --purpose "..."`);
   if (!sub || sub === 'show') {
     const list = rest[0] ? [findAccount(cfg, rest[0])] : cfg.accounts;
     if (list.includes(null)) throw new Error(`No account "${rest[0]}".`);
     return {
-      states: { allow: 'runs', ask: 'asks the user first; refused where no one can be asked', block: 'refused' },
-      groups: Object.fromEntries(Object.entries(GROUPS).map(([g, d]) => [g, { default: d.default, description: d.description }])),
+      note: 'Everything is on unless turned off.',
+      groups: Object.fromEntries(Object.entries(GROUPS).map(([g, d]) => [g, d.description])),
       accounts: list.map((a) => ({ label: a.label, ...permissionSummary(a) })),
     };
   }
   if (sub === 'set') {
     const [label, key, state] = rest;
-    if (!label || !key || !state) throw new Error('Usage: permissions set <label> <group|tool> allow|ask|block');
-    const next = setPermission(cfg, label, key, state);
+    if (!label || !key || !state) throw new Error('Usage: permissions set <label|all> <group|tool> on|off');
+    const { cfg: next, changes } = setPermission(cfg, label, key, state);
     saveAccounts(CONFIG_DIR, next);
-    return { ok: true, account: label, set: { [key]: state }, permissions: permissionSummary(findAccount(next, label)) };
+    const touched = changes.map((c) => c.label);
+    return { ok: true, changes, accounts: next.accounts.filter((a) => touched.includes(a.label)).map((a) => ({ label: a.label, ...permissionSummary(a) })) };
   }
-  if (sub === 'clear') {
-    const [label, key] = rest;
-    if (!label || !key) throw new Error('Usage: permissions clear <label> <group|tool>');
-    const entry = findAccount(cfg, label);
-    if (!entry) throw new Error(`No account "${label}".`);
-    const permissions = { ...entry.permissions };
-    delete permissions[key];
-    const next = { ...cfg, accounts: cfg.accounts.map((a) => (a.label === label ? { ...a, permissions } : a)) };
-    saveAccounts(CONFIG_DIR, next);
-    return { ok: true, account: label, cleared: key, permissions: permissionSummary(findAccount(next, label)) };
-  }
-  if (sub === 'block-all-sends') {
-    const { cfg: next, changes } = blockAllSends(cfg);
+  if (sub === 'all-sends-off') {
+    const { cfg: next, changes } = turnOffAllSends(cfg);
     saveAccounts(CONFIG_DIR, next);
     return {
       ok: true,
-      note: 'One-time action: send is now block on every account. Change any account individually with  permissions set <label> send allow|ask.',
+      note: 'One-time action: sending is now off on every account. Turn any account back on with  permissions set <label> send on.',
       changes,
     };
   }
-  throw new Error(`Unknown: permissions ${sub}. Use show, set, clear, block-all-sends.`);
+  throw new Error(`Unknown: permissions ${sub}. Use show, set, all-sends-off.`);
 }
 
 async function main() {
@@ -590,8 +515,9 @@ async function main() {
     const account = findAccount(cfg, f.account);
     if (!account) throw new Error(`Unknown account "${f.account}". Choose one of: ${labels}.`);
     const ctx = accountContext(CONFIG_DIR, cfg, account);
+    if (COMPOSE_COMMANDS.has(cmd) && json) json = normalizeComposeArgs(json);
     await runWithAccount(ctx, async () => {
-      await enforcePermission({ cmd, account, json, flags: f, ctx });
+      enforcePermission({ cmd, account, json, ctx });
       await run(ctx);
     });
   } catch (err) {

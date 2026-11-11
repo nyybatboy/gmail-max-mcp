@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  parseAccounts, resolvePermission, GROUPS, groupOf, MAX_ACCOUNTS, accountPaths,
-  blockAllSends, setPermission, addAccount, saveAccounts, loadAccounts, AccountsConfigError,
+  parseAccounts, resolvePermission, GROUPS, groupOf, MAX_ACCOUNTS, accountPaths, permissionSummary,
+  setPermission, turnOffAllSends, addAccount, saveAccounts, loadAccounts, AccountsConfigError,
+  accountsFileExists, stateOfKey,
 } from '../lib/accounts.js';
 import { TOOLS } from '../lib/tools.js';
 import { tempDir } from '../testkit/harness.js';
 
 const one = (extra = {}) => ({ accounts: { personal: { purpose: 'Main inbox.', ...extra } } });
-const throwsConfig = (raw, re) => assert.throws(() => parseAccounts(raw), (e) => e instanceof AccountsConfigError && re.test(e.message));
+const throwsConfig = (raw, re, opts) => assert.throws(() => parseAccounts(raw, opts), (e) => e instanceof AccountsConfigError && re.test(e.message));
+const two = () => parseAccounts({ accounts: { personal: { purpose: 'a' }, work: { purpose: 'b' } } });
 
-// ---------- tool classification ----------
+// ---------- groups ----------
 
 test('every MCP tool belongs to exactly one permission group', () => {
   const seen = new Map();
@@ -26,40 +28,35 @@ test('every MCP tool belongs to exactly one permission group', () => {
   for (const t of seen.keys()) assert.ok(TOOLS[t], `group lists unknown tool ${t}`);
 });
 
-test('built-in defaults: send, permanent delete and routing ask; everything else allows', () => {
-  const defaults = Object.fromEntries(Object.entries(GROUPS).map(([g, d]) => [g, d.default]));
-  assert.deepEqual(defaults, {
-    read: 'allow', draft: 'allow', organize: 'allow', send: 'ask', delete: 'ask', routing: 'ask', settings: 'allow',
-  });
+test('everything is on by default, including send, permanent delete and routing', () => {
   const acct = { label: 'personal', permissions: {} };
-  assert.equal(resolvePermission(acct, 'send_message'), 'ask');
-  assert.equal(resolvePermission(acct, 'send_draft'), 'ask');
-  assert.equal(resolvePermission(acct, 'delete_message'), 'ask');
-  assert.equal(resolvePermission(acct, 'create_filter'), 'ask');
-  assert.equal(resolvePermission(acct, 'update_auto_forwarding'), 'ask');
-  assert.equal(resolvePermission(acct, 'trash_message'), 'allow');
-  assert.equal(resolvePermission(acct, 'create_draft'), 'allow');
-  assert.equal(resolvePermission(acct, 'list_messages'), 'allow');
+  for (const name of Object.keys(TOOLS)) assert.equal(resolvePermission(acct, name), 'on', name);
+  assert.deepEqual(permissionSummary(acct), { on: Object.keys(GROUPS), off: [], toolsOff: [], toolsOn: [] });
 });
 
-test('a tool setting beats its group setting, which beats the default', () => {
-  const acct = { label: 'work', permissions: { send: 'allow', send_draft: 'block', read: 'block', get_message: 'allow' } };
-  assert.equal(resolvePermission(acct, 'send_message'), 'allow');
-  assert.equal(resolvePermission(acct, 'send_draft'), 'block');
-  assert.equal(resolvePermission(acct, 'list_messages'), 'block');
-  assert.equal(resolvePermission(acct, 'get_message'), 'allow');
-  assert.equal(resolvePermission(acct, 'delete_message'), 'ask');
+test('a tool setting beats its group setting', () => {
+  const acct = { label: 'work', permissions: { send: 'off', send_draft: 'on', delete_thread: 'off' } };
+  assert.equal(resolvePermission(acct, 'send_message'), 'off');
+  assert.equal(resolvePermission(acct, 'send_draft'), 'on');
+  assert.equal(resolvePermission(acct, 'delete_thread'), 'off');
+  assert.equal(resolvePermission(acct, 'delete_message'), 'on');
+  assert.deepEqual(permissionSummary(acct), {
+    on: ['read', 'draft', 'organize', 'delete', 'routing', 'settings'], off: ['send'], toolsOff: ['delete_thread'], toolsOn: ['send_draft'],
+  });
 });
 
-test('an unclassified tool name resolves to ask, never allow', () => {
-  assert.equal(resolvePermission({ label: 'x', permissions: {} }, 'some_future_tool'), 'ask');
+test('"constructor" and friends are never tools, groups or permission keys', () => {
+  for (const key of ['constructor', 'toString', 'hasOwnProperty']) throwsConfig(one({ permissions: { [key]: 'off' } }), /neither a permission group/);
+  throwsConfig(JSON.parse('{"accounts":{"personal":{"purpose":"x","permissions":{"__proto__":"off"}}}}'), /neither a permission group/);
+  assert.equal(resolvePermission({ permissions: {} }, 'constructor'), 'on');
+  assert.throws(() => setPermission(two(), 'personal', 'constructor', 'off'), /neither a permission group/);
 });
 
 // ---------- validation ----------
 
 test('a valid file parses, keeps order, and trims the purpose', () => {
   const cfg = parseAccounts({ version: 1, accounts: {
-    work: { purpose: ' Work inbox. ', permissions: { send: 'allow', delete_thread: 'block' } },
+    work: { purpose: ' Work inbox. ', permissions: { send: 'off', delete_thread: 'off' } },
     personal: { purpose: 'Main inbox.' },
   } });
   assert.deepEqual(cfg.accounts.map((a) => a.label), ['work', 'personal']);
@@ -74,24 +71,26 @@ test(`more than ${MAX_ACCOUNTS} accounts is rejected`, () => {
   assert.equal(parseAccounts({ accounts }).accounts.length, MAX_ACCOUNTS);
 });
 
-test('rejects: no accounts, bad label, missing purpose, unknown keys, bad states, bad version', () => {
+test('rejects: no accounts, bad or reserved label, missing purpose, unknown keys, bad states, old keys', () => {
   throwsConfig({ accounts: {} }, /No accounts/);
   throwsConfig({ accounts: { Personal: { purpose: 'x' } } }, /label "Personal" is invalid/);
+  throwsConfig({ accounts: { all: { purpose: 'x' } } }, /"all" is reserved/);
   throwsConfig({ accounts: { personal: {} } }, /needs a "purpose"/);
-  throwsConfig({ accounts: { personal: { purpose: '  ' } } }, /needs a "purpose"/);
-  throwsConfig(one({ permission: { send: 'ask' } }), /unknown key "permission"/);
-  throwsConfig(one({ permissions: { sned: 'ask' } }), /"sned" is neither a permission group/);
-  throwsConfig(one({ permissions: { send: 'yes' } }), /use one of allow, ask, block/);
+  throwsConfig(one({ permission: { send: 'off' } }), /unknown key "permission"/);
+  throwsConfig(one({ permissions: { sned: 'off' } }), /"sned" is neither a permission group/);
+  for (const state of ['ask', 'allow', 'block', 'Off', true]) throwsConfig(one({ permissions: { send: state } }), /use "on" or "off"/);
   throwsConfig({ ...one(), version: 2 }, /Unsupported version/);
-  throwsConfig({ ...one(), extra: true }, /Unknown top-level key/);
-  throwsConfig([], /JSON object/);
+  throwsConfig({ ...one(), saveFolders: ['/x'] }, /Unknown top-level key "saveFolders"/);
 });
 
-test('two accounts pointing at the same folder are rejected', () => {
-  throwsConfig({ accounts: {
-    personal: { purpose: 'x', dir: '/tmp/shared-account' },
-    work: { purpose: 'y', dir: '/tmp/shared-account' },
-  } }, /point at the same folder/);
+test('two labels cannot share a folder, by string, symlink or case variant', () => {
+  const dir = tempDir();
+  fs.mkdirSync(path.join(dir, 'real'));
+  fs.symlinkSync(path.join(dir, 'real'), path.join(dir, 'link'));
+  for (const b of ['real', 'link', 'REAL']) {
+    throwsConfig({ accounts: { a: { purpose: 'x', dir: 'real' }, b: { purpose: 'y', dir: b } } }, /same folder/, { configDir: dir });
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('loadAccounts reports invalid JSON with a fix line', () => {
@@ -99,6 +98,18 @@ test('loadAccounts reports invalid JSON with a fix line', () => {
   fs.writeFileSync(path.join(dir, 'accounts.json'), '{ not json');
   assert.throws(() => loadAccounts(dir), /not valid JSON[\s\S]*Fix:/);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a dangling symlink or a directory named accounts.json counts as present (fail closed)', () => {
+  const dir = tempDir();
+  fs.symlinkSync(path.join(dir, 'nowhere.json'), path.join(dir, 'accounts.json'));
+  assert.equal(accountsFileExists(dir), true);
+  assert.throws(() => loadAccounts(dir), /Cannot read the accounts file/);
+  const dir2 = tempDir();
+  fs.mkdirSync(path.join(dir2, 'accounts.json'));
+  assert.equal(accountsFileExists(dir2), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir2, { recursive: true, force: true });
 });
 
 // ---------- paths and credentials ----------
@@ -121,22 +132,46 @@ test('an account folder with its own OAuth client keeps it; otherwise the shared
   fs.rmSync(cfgDir, { recursive: true, force: true });
 });
 
-// ---------- mutations ----------
+// ---------- turning things on and off ----------
 
-test('block-all-sends is a one-time action: every account blocked, then each can change again', () => {
-  const cfg = parseAccounts({ accounts: {
-    personal: { purpose: 'x', permissions: { send: 'ask' } },
-    work: { purpose: 'y', permissions: { send: 'allow', send_draft: 'allow' } },
-  } });
-  const { cfg: blocked, changes } = blockAllSends(cfg);
-  for (const a of blocked.accounts) {
-    assert.equal(resolvePermission(a, 'send_message'), 'block');
-    assert.equal(resolvePermission(a, 'send_draft'), 'block', 'per-tool send overrides are cleared too');
-  }
-  assert.deepEqual(changes.find((c) => c.label === 'work').before, { send_message: 'allow', send_draft: 'allow' });
-  const reopened = setPermission(blocked, 'work', 'send', 'allow');
-  assert.equal(resolvePermission(reopened.accounts.find((a) => a.label === 'work'), 'send_message'), 'allow');
-  assert.equal(resolvePermission(reopened.accounts.find((a) => a.label === 'personal'), 'send_message'), 'block');
+test('setPermission: off, back on, for one account or all, and reports before/after', () => {
+  let { cfg, changes } = setPermission(two(), 'work', 'send', 'off');
+  assert.deepEqual(changes, [{ label: 'work', key: 'send', before: 'on', after: 'off' }]);
+  assert.equal(resolvePermission(cfg.accounts[1], 'send_message'), 'off');
+  assert.equal(resolvePermission(cfg.accounts[0], 'send_message'), 'on');
+  ({ cfg, changes } = setPermission(cfg, 'work', 'send', 'on'));
+  assert.deepEqual(changes, [{ label: 'work', key: 'send', before: 'off', after: 'on' }]);
+  assert.deepEqual(cfg.accounts[1].permissions, {}, 'on is the default and is not stored');
+  ({ cfg } = setPermission(cfg, 'all', 'delete', 'off'));
+  assert.ok(cfg.accounts.every((a) => resolvePermission(a, 'delete_thread') === 'off'));
+});
+
+test('setting a group resets single tools inside it; a tool can still be set against its group', () => {
+  let { cfg } = setPermission(two(), 'work', 'send_draft', 'off');
+  assert.equal(stateOfKey(cfg.accounts[1], 'send'), 'mixed');
+  ({ cfg } = setPermission(cfg, 'work', 'send', 'on'));
+  assert.equal(resolvePermission(cfg.accounts[1], 'send_draft'), 'on', '"turn sending back on" turns every send tool on');
+  ({ cfg } = setPermission(cfg, 'work', 'send', 'off'));
+  ({ cfg } = setPermission(cfg, 'work', 'send_draft', 'on'));
+  assert.equal(resolvePermission(cfg.accounts[1], 'send_draft'), 'on');
+  assert.equal(resolvePermission(cfg.accounts[1], 'send_message'), 'off');
+});
+
+test('setPermission refuses bad input', () => {
+  const cfg = two();
+  assert.throws(() => setPermission(cfg, 'nobody', 'send', 'off'), /No account "nobody"/);
+  assert.throws(() => setPermission(cfg, 'work', 'sendd', 'off'), /neither a permission group/);
+  assert.throws(() => setPermission(cfg, 'work', 'send', 'block'), /"on" or "off"/);
+  assert.throws(() => setPermission(cfg, [], 'send', 'off'), /at least one account/);
+});
+
+test('turn off all sends is a one-time action: every account off, then each can be turned back on', () => {
+  const { cfg, changes } = turnOffAllSends(two());
+  assert.ok(cfg.accounts.every((a) => resolvePermission(a, 'send_message') === 'off' && resolvePermission(a, 'send_draft') === 'off'));
+  assert.equal(changes.length, 2);
+  const { cfg: reopened } = setPermission(cfg, 'personal', 'send', 'on');
+  assert.equal(resolvePermission(reopened.accounts[0], 'send_message'), 'on');
+  assert.equal(resolvePermission(reopened.accounts[1], 'send_message'), 'off');
 });
 
 test('addAccount enforces the cap and unique labels', () => {
@@ -146,21 +181,23 @@ test('addAccount enforces the cap and unique labels', () => {
   assert.throws(() => addAccount(cfg, { label: 'a0', purpose: 'x' }), /already exists/);
 });
 
-test('setPermission rejects unknown keys and states', () => {
-  const cfg = parseAccounts(one());
-  assert.throws(() => setPermission(cfg, 'personal', 'sendd', 'ask'), /neither a permission group/);
-  assert.throws(() => setPermission(cfg, 'personal', 'send', 'maybe'), /allow, ask, block/);
-  assert.throws(() => setPermission(cfg, 'nobody', 'send', 'ask'), /No account/);
-});
-
-test('saveAccounts writes mode 600, round-trips, and refuses to write an invalid config', () => {
+test('saveAccounts writes mode 600, round-trips, keeps a symlink, and refuses to write an invalid config', () => {
   const dir = tempDir();
-  const cfg = setPermission(parseAccounts(one()), 'personal', 'send', 'ask');
+  const { cfg } = setPermission(parseAccounts(one()), 'personal', 'send', 'off');
   saveAccounts(dir, cfg);
   const file = path.join(dir, 'accounts.json');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(loadAccounts(dir), cfg);
   assert.throws(() => saveAccounts(dir, { version: 1, accounts: [] }), /No accounts/);
   assert.deepEqual(loadAccounts(dir), cfg, 'a failed save leaves the file untouched');
+
+  const dir2 = tempDir();
+  const target = path.join(dir2, 'real-accounts.json');
+  fs.writeFileSync(target, JSON.stringify({ accounts: { personal: { purpose: 'x' } } }));
+  fs.symlinkSync(target, path.join(dir2, 'accounts.json'));
+  saveAccounts(dir2, setPermission(loadAccounts(dir2), 'personal', 'send', 'off').cfg);
+  assert.equal(fs.lstatSync(path.join(dir2, 'accounts.json')).isSymbolicLink(), true);
+  assert.match(fs.readFileSync(target, 'utf8'), /"send": "off"/);
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir2, { recursive: true, force: true });
 });

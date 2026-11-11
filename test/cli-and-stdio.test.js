@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -58,7 +58,7 @@ test('CLI: accounts add adopts an existing folder and turns multi-account mode o
   const list = s.cli('accounts', 'list').out;
   assert.deepEqual(list.accounts.map((a) => [a.label, a.tokenPresent]), [['personal', true], ['work', false]]);
   assert.equal(list.accounts[0].dir, adopt);
-  assert.equal(list.accounts[0].permissions.groups.send, 'ask', 'built-in default');
+  assert.deepEqual(list.accounts[0].permissions.off, [], 'everything is on by default');
 });
 
 test('CLI: the five-account cap, label rules and unknown permission keys are enforced', (t) => {
@@ -74,25 +74,27 @@ test('CLI: the five-account cap, label rules and unknown permission keys are enf
   assert.match(s.cli('accounts', 'add', 'Bad', '--purpose', 'x').err.error, /label "Bad" is invalid/);
   assert.match(s.cli('accounts', 'add', 'blank', '--purpose', '  ').err.error, /needs a "purpose"/);
   assert.match(s.cli('accounts', 'add', 'nopurpose', '--no-auth').err.error, /needs --purpose/);
-  assert.match(s.cli('permissions', 'set', 'a1', 'sned', 'ask').err.error, /neither a permission group/);
+  assert.match(s.cli('permissions', 'set', 'a1', 'sned', 'off').err.error, /neither a permission group/);
+  assert.match(s.cli('permissions', 'set', 'a1', 'send', 'ask').err.error, /"on" or "off"/);
+  assert.match(s.cli('accounts', 'add', 'all', '--purpose', 'x', '--no-auth').err.error, /"all" is reserved/);
 });
 
-test('CLI: permissions set / clear / block-all-sends', (t) => {
+test('CLI: permissions set on/off, for one account or all, and all-sends-off', (t) => {
   const s = sandbox();
   t.after(s.cleanup);
   s.cli('accounts', 'add', 'personal', '--purpose', 'Main inbox.', '--no-auth');
   s.cli('accounts', 'add', 'work', '--purpose', 'Work inbox.', '--no-auth');
-  assert.equal(s.cli('permissions', 'set', 'work', 'send', 'allow').out.permissions.groups.send, 'allow');
-  assert.deepEqual(s.cli('permissions', 'set', 'work', 'delete_thread', 'block').out.permissions.overrides, { delete_thread: 'block' });
-  assert.deepEqual(s.cli('permissions', 'clear', 'work', 'delete_thread').out.permissions.overrides, {});
+  assert.deepEqual(s.cli('permissions', 'set', 'work', 'send', 'off').out.accounts[0].off, ['send']);
+  assert.deepEqual(s.cli('permissions', 'set', 'work', 'delete_thread', 'off').out.accounts[0].toolsOff, ['delete_thread']);
+  assert.deepEqual(s.cli('permissions', 'set', 'work', 'delete_thread', 'on').out.accounts[0].toolsOff, []);
+  assert.deepEqual(s.cli('permissions', 'set', 'all', 'routing', 'off').out.accounts.map((a) => a.off), [['routing'], ['send', 'routing']]);
 
-  const blocked = s.cli('permissions', 'block-all-sends').out;
-  assert.match(blocked.note, /One-time action/);
-  const show = s.cli('permissions', 'show').out.accounts;
-  assert.ok(show.every((a) => a.groups.send === 'block'));
-  s.cli('permissions', 'set', 'work', 'send', 'allow');
-  const after = Object.fromEntries(s.cli('permissions', 'show').out.accounts.map((a) => [a.label, a.groups.send]));
-  assert.deepEqual(after, { personal: 'block', work: 'allow' });
+  const off = s.cli('permissions', 'all-sends-off').out;
+  assert.match(off.note, /One-time action/);
+  assert.ok(s.cli('permissions', 'show').out.accounts.every((a) => a.off.includes('send')));
+  s.cli('permissions', 'set', 'personal', 'send', 'on');
+  const after = Object.fromEntries(s.cli('permissions', 'show').out.accounts.map((a) => [a.label, a.off.includes('send')]));
+  assert.deepEqual(after, { personal: false, work: true });
 });
 
 test('CLI: removing the last account is refused; --delete-token removes only that account\'s token files', (t) => {
@@ -125,28 +127,55 @@ test('CLI: Gmail commands need --account in multi-account mode; --account is rej
   assert.match(s.cli('list-labels', '--account', 'nobody').err.error, /Unknown account "nobody"/);
 });
 
-test('CLI: ask is refused without an interactive terminal; block is refused; both before any Gmail call', (t) => {
+test('CLI: a command that is off is refused before any Gmail call; one that is on runs (no prompt)', (t) => {
   const s = sandbox();
   t.after(s.cleanup);
   s.cli('accounts', 'add', 'personal', '--purpose', 'x', '--no-auth');
   s.cli('accounts', 'add', 'work', '--purpose', 'y', '--no-auth');
-  s.cli('permissions', 'set', 'work', 'send', 'block');
+  s.cli('permissions', 'set', 'work', 'send', 'off');
+  s.cli('permissions', 'set', 'personal', 'delete', 'off');
   const msg = JSON.stringify({ to: 'a@example.net', subject: 's', text: 'b' });
 
-  const ask = s.cli('send', '--account', 'personal', '--json', msg);
-  assert.equal(ask.code, 1);
-  assert.deepEqual([ask.err.account, ask.err.refused], ['personal', true]);
-  assert.match(ask.err.reason, /needs the user's approval and this client cannot ask/);
-
-  const block = s.cli('send', '--account', 'work', '--json', msg);
-  assert.match(block.err.reason, /Sending from "work" is blocked/);
-
+  const off = s.cli('send', '--account', 'work', '--json', msg);
+  assert.equal(off.code, 1);
+  assert.deepEqual(off.err, { account: 'work', refused: true, reason: 'Not sent. Sending is turned off for the "work" account. The user can ask to have it turned back on.' });
   const del = s.cli('delete-message', '--account', 'personal', '--id', 'x');
-  assert.match(del.err.reason, /^Not run\. delete_message on "personal" needs the user's approval/);
+  assert.match(del.err.reason, /^Not run\. delete_message .* is turned off for the "personal" account/);
+  // No token exists: had these reached Gmail they would say "Not authenticated".
+  for (const r of [off, del]) assert.doesNotMatch(r.rawErr, /Not authenticated/);
 
-  // No token exists for either account: had any of these reached Gmail they
-  // would have failed with "Not authenticated" instead of a refusal.
-  for (const r of [ask, block, del]) assert.doesNotMatch(r.rawErr, /Not authenticated/);
+  // On: no prompt, straight to Gmail (which fails here only for lack of a token).
+  const on = s.cli('send', '--account', 'personal', '--json', msg);
+  assert.match(on.rawErr, /Not authenticated/);
+});
+
+test('CLI: unmapped commands are refused; compose checks and the credential guard apply', (t) => {
+  const s = sandbox();
+  t.after(s.cleanup);
+  s.cli('accounts', 'add', 'work', '--purpose', 'y', '--no-auth');
+  assert.match(s.cli('frobnicate', '--account', 'work').err.error, /Unknown or unmapped command "frobnicate"/);
+  const inj = s.cli('send', '--account', 'work', '--json', JSON.stringify({ to: 'a@example.net', subject: 's', text: 'b', headers: { Bcc: 'x@example.net' } }));
+  assert.match(inj.err.error, /^Refused: "Bcc" cannot be set through "headers"/);
+  const att = s.cli('create-draft', '--account', 'work', '--json', JSON.stringify({ to: 'a@example.net', attachments: [{ path: path.join(s.cfg, 'accounts.json') }] }));
+  assert.match(att.err.error, /inside gmail-max's own configuration/);
+  const save = s.cli('get-attachment', '--account', 'work', '--message-id', 'm', '--attachment-id', 'a', '--save-path', path.join(s.cfg, 'accounts.json'));
+  assert.match(save.err.error, /inside gmail-max's own configuration/);
+  for (const r of [inj, att, save]) assert.doesNotMatch(r.rawErr, /Not authenticated/);
+});
+
+test('CLI: accounts and permissions do not wait on an open stdin pipe', async (t) => {
+  const s = sandbox();
+  t.after(s.cleanup);
+  s.cli('accounts', 'add', 'work', '--purpose', 'y', '--no-auth');
+  for (const args of [['accounts', 'list'], ['permissions', 'show']]) {
+    const child = spawn(process.execPath, [CLI, ...args], { env: s.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const code = await new Promise((resolve) => {
+      const timer = setTimeout(() => { child.kill(); resolve('hung'); }, 5000);
+      child.on('exit', (c) => { clearTimeout(timer); resolve(c); });
+    });
+    child.stdin.destroy();
+    assert.equal(code, 0, `${args.join(' ')} ${code === 'hung' ? 'waited on stdin' : 'failed'}`);
+  }
 });
 
 // ---------- stdio server ----------
@@ -154,16 +183,16 @@ test('CLI: ask is refused without an interactive terminal; block is refused; bot
 test('stdio: with an accounts file the server starts in multi-account mode', async (t) => {
   const s = sandbox();
   t.after(s.cleanup);
-  writeAccounts(s.cfg, { personal: { purpose: 'Main inbox.' }, work: { purpose: 'Work inbox.', permissions: { send: 'allow' } } });
+  writeAccounts(s.cfg, { personal: { purpose: 'Main inbox.', permissions: { send: 'off' } }, work: { purpose: 'Work inbox.' } });
   const transport = new StdioClientTransport({ command: process.execPath, args: [MCP], env: s.env, stderr: 'ignore' });
   const client = new Client({ name: 't', version: '0' }, { capabilities: {} });
   await client.connect(transport);
   t.after(() => client.close());
   const { tools } = await client.listTools();
-  assert.equal(tools[0].name, 'list_accounts');
-  assert.deepEqual(tools.find((x) => x.name === 'send_message').inputSchema.properties.account.enum, ['personal', 'work']);
+  assert.deepEqual(tools.slice(0, 2).map((x) => x.name), ['list_accounts', 'set_permission']);
+  assert.deepEqual(tools.find((x) => x.name === 'send_message').inputSchema.properties.account.enum, ['work']);
   const refused = await client.callTool({ name: 'send_message', arguments: { account: 'personal', to: 'a@example.net' } });
-  assert.match(refused.content[0].text, /cannot ask for it/);
+  assert.match(refused.content[0].text, /Sending is turned off for the \\"personal\\" account/);
 });
 
 test('stdio: an invalid accounts file stops the server from starting', (t) => {
