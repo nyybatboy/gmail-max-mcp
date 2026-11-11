@@ -92,12 +92,12 @@ The first `accounts add` creates `~/.gmail-mcp/accounts.json`, which switches th
 
 **OAuth client.** A new account uses the shared `~/.gmail-mcp/credentials.json`; one OAuth client serves every account, and each account consents separately. An adopted folder that has its own `credentials.json` keeps using it, because a refresh token only works with the client that issued it.
 
-**Permissions.** New accounts start on the built-in defaults: sending, permanent deletes and mail-routing changes **ask** you first; everything else is allowed. Change them per account:
+**Permissions.** Everything is on for every account until you turn it off. Tell the model ("turn off sending for the work account") or use the CLI:
 
 ```bash
 node bin/gmail-cli.js permissions show
-node bin/gmail-cli.js permissions set work send allow
-node bin/gmail-cli.js permissions set personal routing block
+node bin/gmail-cli.js permissions set work send off
+node bin/gmail-cli.js permissions set work send on
 ```
 
 See README "Multiple accounts" for the full model.

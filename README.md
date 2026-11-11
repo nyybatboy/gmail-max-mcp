@@ -12,11 +12,10 @@ lib/
                error-mapping safe() wrapper so 403/401 surface with fix-it lines
   tools.js     the MCP tool table (name, description, input schema, handler)
   server.js    single-account server, and the multi-account server
-  accounts.js  accounts.json: registry, permission groups, allow/ask/block resolution
+  accounts.js  accounts.json: registry, permission groups, on/off resolution
   context.js   per-call account context used by auth.js and gmail.js
-  approval.js  the "ask" dialog text, answer reading, compose checks, refusal messages
-  fs-guard.js  keeps file reads/writes out of gmail-max's own folders (multi-account mode)
-  prompt.js    the CLI's y/N prompt for "ask"
+  compose-checks.js  refuses malformed mail and credential paths (multi-account mode)
+  fs-guard.js  keeps attachments and saves away from tokens and client files (multi-account mode)
   id-ledger.js which account an ID came from (error hints only)
 bin/
   gmail-cli.js   shell interface (testable standalone, scriptable);
@@ -58,81 +57,63 @@ node bin/gmail-cli.js accounts add work --purpose "Work inbox: clients and invoi
 
 **What comes back.** Every result names the account and address it acted on: `{ "account": "work", "address": "...", "result": { ... } }`. Tools that compose mail (`send_message`, `send_draft`, `create_draft`, `create_reply_draft`, `update_draft`) lead with the From address: `{ "account", "from", "address", "result" }`. Errors carry `account` too.
 
-**Permissions, per account.** Each account has its own permission for every tool, in one of three states:
+**Turning things on and off, per account.** Everything is on by default, for every account: reading, drafts, organizing, sending, permanent delete, routing and settings. You turn off what you don't want, and it stays off until you turn it back on. Each account has its own switches.
 
-| State | What happens |
-|---|---|
-| `allow` | Runs. |
-| `ask` | The server asks you in a dialog first (MCP elicitation) and runs only if you tick the box and submit. If your client cannot show the dialog, the call is refused. |
-| `block` | Refused. A tool blocked on every account is not listed at all; an account blocked for a tool is left out of that tool's `account` choices. |
+The simplest way is to tell the model: "turn off sending for the work account", "turn sending back on for the personal account", "turn off permanent delete everywhere". It calls `set_permission`:
 
-Tools are grouped so the file stays short. A setting can name a group or one tool; a tool setting beats its group, which beats the built-in default.
-
-| Group | Default | Tools |
-|---|---|---|
-| `read` | allow | every `list_*`, `get_*`, `batch_get_*`, `whoami`, `list_history` |
-| `draft` | allow | `create_draft`, `create_reply_draft`, `update_draft`, `delete_draft` |
-| `organize` | allow | `modify_*`, `batch_modify_messages`, `trash_*`, `untrash_*`, `create_label`, `update_label`, `delete_label` |
-| `send` | **ask** | `send_message`, `send_draft` |
-| `delete` | **ask** | `delete_message`, `batch_delete_messages`, `delete_thread` (permanent, skip Trash) |
-| `routing` | **ask** | `create_filter`, `delete_filter`, `update_auto_forwarding`, `create_forwarding_address`, `delete_forwarding_address`, `create_delegate`, `delete_delegate`, `create_send_as`, `update_send_as`, `delete_send_as`, `verify_send_as` |
-| `settings` | allow | `update_vacation`, `update_imap`, `update_pop`, `update_language`, `insert_smime`, `set_default_smime`, `delete_smime`, `watch`, `stop_watch` |
-
-`accounts.json` (in the config directory, mode 600):
-
-```json
-{
-  "version": 1,
-  "saveFolders": ["~/Downloads/gmail-max"],
-  "accounts": {
-    "personal": { "purpose": "Main inbox.", "dir": "/path/to/existing/folder", "permissions": { "send": "ask", "routing": "block" } },
-    "work":     { "purpose": "Work inbox: clients and invoices.", "permissions": { "send": "allow", "delete_thread": "block" } }
-  }
-}
+```
+set_permission({ account: "<label>" | "all", what: "<group or tool name>", state: "on" | "off" })
 ```
 
-`dir` is optional (default `<config dir>/accounts/<label>/`); it holds that account's `token.json` and `profile.json`, and may hold its own `credentials.json`, which then takes precedence over the shared one. Edit the file by hand or use the CLI; the server re-reads it on every call, so a change applies to the next call, and it tells the client the tool list changed. An invalid file stops the server from starting; a file broken while it runs makes every call fail until it is fixed.
+The change is saved in `accounts.json`, so it holds across restarts and for every client on this machine. The result says plainly what is now on and off for the accounts it touched. On the next call the tool list reflects it: an account where a tool is off disappears from that tool's `account` choices, and a tool that is off on every account is not listed at all. A call to a tool that is off is refused with one line, for example: `Not sent. Sending is turned off for the "work" account. The user can ask to have it turned back on.` Nothing else changes: a send that is on just sends.
+
+Tools are grouped so one switch covers what people mean:
+
+| Group | Tools |
+|---|---|
+| `read` | every `list_*`, `get_*`, `batch_get_*`, `whoami`, `list_history` |
+| `draft` | `create_draft`, `create_reply_draft`, `update_draft`, `delete_draft` |
+| `organize` | `modify_*`, `batch_modify_messages`, `trash_*`, `untrash_*`, `create_label`, `update_label`, `delete_label` |
+| `send` | `send_message`, `send_draft` |
+| `delete` | `delete_message`, `batch_delete_messages`, `delete_thread` (permanent, skip Trash) |
+| `routing` | `create_filter`, `delete_filter`, `update_auto_forwarding`, `create_forwarding_address`, `delete_forwarding_address`, `create_delegate`, `delete_delegate`, `create_send_as`, `update_send_as`, `delete_send_as`, `verify_send_as` |
+| `settings` | `update_vacation`, `update_imap`, `update_pop`, `update_language`, `insert_smime`, `set_default_smime`, `delete_smime`, `watch`, `stop_watch` |
+
+`what` can also be a single tool name (for example `send_draft`). Setting a group resets any single tools inside it, so "turn sending back on" turns every send tool on. To turn sending off on every account at once, set `send` to off for `"all"` (the CLI has `permissions all-sends-off`); that is a one-time change, and each account can be turned back on on its own afterwards. `list_accounts` shows each account's address and what is on and off, so the model can answer "can you send from my work account?" without trying.
+
+The same switches from the CLI, or by editing `accounts.json` (in the config directory, mode 600):
 
 ```bash
 node bin/gmail-cli.js accounts list | add | remove <label> [--delete-token]
 node bin/gmail-cli.js permissions show [<label>]
-node bin/gmail-cli.js permissions set <label> <group|tool> allow|ask|block
-node bin/gmail-cli.js permissions clear <label> <group|tool>
-node bin/gmail-cli.js permissions block-all-sends
-node bin/gmail-cli.js save-folders list | add <folder> | remove <folder>
+node bin/gmail-cli.js permissions set <label|all> <group|tool> on|off
+node bin/gmail-cli.js permissions all-sends-off
 ```
 
-`block-all-sends` is a one-time action, not a switch: it sets `send` to `block` on every account (clearing per-tool send overrides) and stops. Each account can be changed again individually afterwards.
+```json
+{
+  "version": 1,
+  "accounts": {
+    "personal": { "purpose": "Main inbox.", "dir": "/path/to/existing/folder" },
+    "work":     { "purpose": "Work inbox: clients and invoices.", "permissions": { "send": "off" } }
+  }
+}
+```
 
-**The ask dialog.** For a send it shows everything that leaves the account: the account and its address, every header in the order it is sent (From, To, Cc, Bcc, Reply-To, Subject, In-Reply-To, References and any extra header; a header that appears twice is flagged), every attachment and inline image with its content type, where its bytes come from and their size, and the body the recipient will see (the HTML when there is one) with its total length and the first 5,000 characters, which is the whole of an ordinary email; a longer body says how many characters are not shown. The HTML preview errs towards showing too much: only real tags are removed, text hidden by CSS is shown (with a note), every link target and remote resource (`href`, `src`, `srcset`, `background`, CSS `url()`, ...) is listed under the body, and markup a mail app might treat unusually (an unterminated comment, style or script, CDATA) adds a warning and the HTML source. When the plain-text version differs from the HTML, the dialog says so and shows both. For `send_draft` the server reads the draft first and shows what it actually contains, to the same standard, every part listed with its type; after you approve it compares a hash of the draft's complete raw message with the one you approved and refuses if anything changed. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask. If the client abandons the tool call while the dialog is open, a later approval does nothing.
+Anything not listed is on. `dir` is optional (default `<config dir>/accounts/<label>/`); it holds that account's `token.json` and `profile.json`, and may hold its own `credentials.json`, which then takes precedence over the shared one. The server re-reads the file on every call. An invalid file stops the server from starting; a file broken while it runs makes every call fail until it is fixed. `all` cannot be used as a label.
 
-For other actions set to `ask`, the dialog prints the deciding fields first and in full (for example a filter's forward target, a send-as reply-to address, a delegate, the number of messages a batch delete touches), counts every list, and truncates only the rest. Secrets and binary data are never shown.
+**What an off switch protects against.** The model can change these switches; that is the point, so it can act on what you tell it. So an off switch protects against a model forgetting or misjudging which account it is in. It does not protect against a model that has been talked into turning sending back on by something it read, such as an email written to manipulate it. If you want an account's setting to hold even then, keep that account out of this server (give it a separate registration of its own) or watch `accounts.json` for changes. A lock that the tool will not change is a possible later addition, not part of this release.
 
-**Composing in multi-account mode.** To keep the dialog honest, a compose call is refused if a header-bound argument contains a line break; if `headers` tries to set To, Cc, Bcc, From, Reply-To, Sender, Subject or the MIME structure headers (use the dedicated arguments); if an address is not a string, `{ email, name }` or a flat list of those; if an attachment name contains a quote; if a `mimeType` is not a plain `type/subtype` (no parameters, not `multipart/*` or `message/*`); if inline `contentBase64` is not base64 without spaces; or if an inline image is not `image/*` (give `mimeType` when supplying base64).
+**Credentials stay out of reach.** In multi-account mode no file inside the config directory or an account folder can be attached to a message, and `get_attachment` will not save into those folders. Paths are resolved the way the operating system resolves them, so a symlink or a `..` cannot get around this. Everywhere else, `savePath` saves where it is told and overwrites, as in single-account mode.
 
-**Saving attachments: save folders only.** In multi-account mode, `get_attachment` with `savePath` writes only inside the **save folders**, which this narrows on purpose. Without that, a save could create a file that runs later (a shell startup file, a login item, an MCP client's config) and so change the permissions without a shell. The rules:
-- The default save folder is `~/Downloads/gmail-max`, created (mode 700) the first time something is saved there.
-- A **relative** `savePath` (for example `invoices/march.pdf`) is saved under the **first** save folder; it no longer means "relative to the server's working directory". An absolute `savePath` must be inside one of the save folders after resolving symlinks.
-- A save never overwrites anything (create-only), never lands in the config directory, an account folder or the package folder even if a save folder contains them, and is refused if the path has a `..` segment. Subfolders inside a save folder must already exist.
-- To widen it, list more folders: `gmail-cli save-folders add <folder>` (or `remove`, `list`), or edit `accounts.json`: `"saveFolders": ["~/Downloads/gmail-max", "~/Documents/Mail"]` (absolute paths or `~/...`; the first is where relative paths go; listing any folder replaces the default). Only you can change this; no tool writes it. Adding a broad folder such as your home directory brings the "file that runs later" risk back.
-- `list_accounts` and the `savePath` description tell the model where it can save.
+**Compose checks in multi-account mode.** A message that would go out malformed is refused with a line saying why: a line break inside a header field; an address that is not a string, `{ email, name }` or a flat list of those; a `headers` entry for a header that has its own argument or that defines the message structure (To, Cc, Bcc, From, Reply-To, Sender, Subject, In-Reply-To, References, Message-ID, Date, MIME-Version, Content-Type, Content-Transfer-Encoding), which would otherwise appear twice; an invalid header name; a quote or line break in an attachment's filename, type or Content-ID; or attachment content that is not base64. Whitespace inside base64 content is removed rather than refused.
 
-Single-account mode is unchanged: `savePath` writes wherever it points, as before.
+**Worth knowing when you turn things off.**
+- Turning off `send` does not turn off `update_vacation` (group `settings`), which sends automatic replies in your name to whoever writes in. Turn `settings` or `update_vacation` off too if that matters.
+- `delete_draft` and `update_draft` (group `draft`) can overwrite or delete a draft you wrote by hand.
+- Switches are per account, not per piece of content: an account where sending is on can carry text the model read from an account where it is off.
 
-**gmail-max's own files are off limits.** In multi-account mode, attachment and inline-image `path` reads inside the config directory or an account folder are refused (symlinks resolved, `..` refused), so a token or the accounts file cannot be mailed.
-
-**When the client cannot ask** (no elicitation support, a headless run, or a client that cancels or never answers): the call is refused with the reason. For a send, the refusal tells the model to leave a draft with `create_draft` instead (when drafts are allowed on that account) so you can send it from Gmail. The server never creates that draft on its own.
-
-**The CLI.** It applies the same allow/ask/block rules: `ask` prompts y/N in an interactive terminal and is refused anywhere else. Treat that prompt as a courtesy check, not a barrier: a process driving a pseudo-terminal can answer it, and anything that can run a shell on the machine can edit `accounts.json` anyway.
-
-**The model cannot change permissions through this server.** No tool writes them, the file guard above keeps tools away from the accounts file, `list_accounts` shows permissions read-only, and refusal messages never point at how to change them. That is the scope of the protection: permissions guard against the model's mistakes made through this server. They are not a defence against anything with a shell on the same machine, which can edit the file or use a token directly. An `ask` is also only as honest as your client: a client configured to auto-answer dialogs has skipped the question by your choice.
-
-**Choosing your permissions.** The defaults are a starting point. Three things worth knowing:
-- `update_vacation` (group `settings`, allow by default) turns on an auto-responder that sends replies in your name to whoever writes in. If that should need your approval, set it to `ask` on that account.
-- `delete_draft` and `update_draft` (group `draft`, allow) can destroy or overwrite a draft you wrote by hand. Set them to `ask` if you keep hand-written drafts in an account.
-- Permissions are per account, not per piece of content. An account where send is `allow` can carry text the model read from an account where send is `ask`. If that matters, keep send on `ask` everywhere it could.
-
-**Want ask-before-send with a single account?** Add just that one account; multi-account mode works with one.
+**Want switches with a single account?** Add just that one account; multi-account mode works with one.
 
 **Not-found hints.** If a call fails because an ID belongs to another account seen earlier in the same session, the error says so. Gmail already rejects the ID; this only makes the message clearer, and IDs the server has not seen pass through unchanged.
 
@@ -142,7 +123,8 @@ All tools accept JSON arguments matching their declared input schema. Names belo
 
 In multi-account mode every tool below also takes a required `account` (one of your labels), and one extra tool exists:
 
-- **`list_accounts`** — `{}` → `{ accounts: [{ label, purpose, address, permissions: { groups, overrides } }] }`. Read-only.
+- **`list_accounts`** — `{}` → `{ accounts: [{ label, purpose, address, on: [groups], off: [groups], toolsOff: [tools], toolsOn: [tools] }] }`.
+- **`set_permission`** — `{ account: <label> | "all", what: <group or tool>, state: "on" | "off" }` → `{ summary, changes: [{ account, what, before, after }], accounts: [{ label, on, off, toolsOff, toolsOn }] }`. Saved to `accounts.json`. Use when the user asks.
 
 ### Profile
 
@@ -281,7 +263,7 @@ These are not enforced by the server — they are the conventions an agent shoul
 
 ### Several accounts: choose `account` on every call
 
-In multi-account mode, pick `account` from the purpose lines in its description, or call `list_accounts`. Check the `account` and `from` at the top of each result before reporting work as done. A refusal with `refused: true` is final for that call: follow its suggestion (usually a draft), and do not retry unless the user asks.
+In multi-account mode, pick `account` from the purpose lines in its description, or call `list_accounts`. Check the `account` and `from` at the top of each result before reporting work as done. A refusal with `refused: true` means that tool is turned off for that account: tell the user, and turn it back on with `set_permission` only if they ask.
 
 ### Reply drafts: use `create_reply_draft`, not `create_draft`
 
@@ -345,13 +327,12 @@ All stored at `~/.gmail-mcp/`, mode 700 directory:
 - `profile.json` (mode 600) — `{ email, historyId, cachedAt }`, 7-day TTL. `whoami --fresh` forces a refetch.
 - `accounts.json` (mode 600, multi-account mode only) — account labels, purposes, folders and permissions. No secrets.
 - `accounts/<label>/` (multi-account mode, unless the account sets its own `dir`) — that account's `token.json`, `profile.json`, and optionally its own `credentials.json`.
-- `~/Downloads/gmail-max/` (multi-account mode, default save folder) — attachments saved with `get_attachment`; see [Multiple accounts](#multiple-accounts).
 
 None of these are committed; the project's `.gitignore` covers `credentials.json`, `token.json`, `profile.json`, and `client_secret*.json` at any path.
 
 ### If you want to narrow the blast radius
 
-Use the per-account permissions in [Multiple accounts](#multiple-accounts) (they work with a single account too): `ask` puts a human confirmation in front of a tool or group, `block` refuses it and removes it from the tool list. By default sends, permanent deletes and routing changes ask. Be clear about what this is: a guard against an agent's mistakes, enforced by this server. It is not a defence against anyone who can run commands on the same machine, since they can edit `accounts.json` or use the token directly, and the OAuth scope itself is unchanged.
+Turn off what an account should not do, with the per-account switches in [Multiple accounts](#multiple-accounts) (they work with a single account too): a tool that is off is refused and removed from the tool list. Be clear about what this is: a guard against an agent's mistakes, enforced by this server. The model can turn switches back on when asked, so it is not a defence against a model that has been manipulated, nor against anyone who can run commands on the same machine (they can edit `accounts.json` or use the token directly), and the OAuth scope itself is unchanged.
 
 Finer policies (for example, deny `send_message` unless `to` matches an allowlist) are not built in. The place to add them is the multi-account `CallToolRequestSchema` handler in `lib/server.js`, next to the permission check. A scope-narrowing fork could also simply omit tools from the `TOOLS` map in `lib/tools.js`.
 
