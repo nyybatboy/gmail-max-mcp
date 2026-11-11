@@ -385,7 +385,7 @@ function describeAccount(a) {
     purpose: a.purpose,
     dir: p.dir,
     tokenPresent: fs.existsSync(p.tokenPath),
-    oauthClient: p.credentialsPath === path.join(p.dir, 'credentials.json') ? 'own (in account folder)' : 'shared (config directory)',
+    oauthClient: p.credentialsPath === path.join(CONFIG_DIR, 'credentials.json') ? 'shared (config directory)' : 'own (in account folder)',
     permissions: permissionSummary(a),
   };
 }

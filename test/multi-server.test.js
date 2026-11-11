@@ -246,6 +246,18 @@ test('ask on a non-send action: generic dialog with the arguments', async (t) =>
   assert.equal(req.requestedSchema.properties.approve.title, 'Allow this action');
 });
 
+test('the generic ask dialog redacts secrets and binary data', async (t) => {
+  const h = await startMulti({ elicit: () => ({ action: 'decline' }), accounts: {
+    personal: { purpose: 'Main inbox.', permissions: { insert_smime: 'ask' } },
+    work: { purpose: 'Work inbox.' },
+  } });
+  t.after(h.close);
+  await h.call('insert_smime', { account: 'personal', sendAsEmail: 'owner@example.com', pkcs12: 'QUJD', encryptedKeyPassword: 'hunter2' });
+  const msg = h.elicitations[0].message;
+  assert.doesNotMatch(msg, /hunter2|QUJD/);
+  assert.match(msg, /"encryptedKeyPassword":"\[redacted\]"/);
+});
+
 test('refusal text never points the model at the permission settings', async (t) => {
   const h = await startMulti({ accounts: {
     personal: { purpose: 'Main inbox.', permissions: { send: 'block', delete: 'block' } },
