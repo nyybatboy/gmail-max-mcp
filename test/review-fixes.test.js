@@ -39,7 +39,7 @@ test('1: get_attachment cannot overwrite accounts.json, and the next send still 
   const before = fs.readFileSync(file, 'utf8');
   const w = await h.call('get_attachment', { account: 'work', messageId: 'm1', attachmentId: 'a1', savePath: file });
   assert.equal(w.isError, true);
-  assert.match(w.body.error, /inside gmail-max's own configuration/);
+  assert.match(w.body.error, /outside the save folders/);
   assert.equal(fs.readFileSync(file, 'utf8'), before);
   assert.equal(h.fake.calls.filter((c) => c.method === 'attachments.get').length, 0, 'refused before fetching');
   const send = await h.call('send_message', { account: 'personal', ...MSG });
@@ -50,15 +50,15 @@ test('1: get_attachment cannot overwrite accounts.json, and the next send still 
 test('1: savePath through a symlink into an account folder is refused; existing files are never overwritten', async (t) => {
   const mailboxes = DEFAULT_MAILBOXES();
   mailboxes.work.attachmentData = b64('hello');
-  const h = await startMulti({ mailboxes });
-  t.after(h.close);
   const outside = tempDir('gmail-max-out-');
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const h = await startMulti({ mailboxes, saveFolders: [outside] });
+  t.after(h.close);
   const acctDir = path.join(h.configDir, 'accounts', 'work');
   fs.mkdirSync(acctDir, { recursive: true });
   fs.symlinkSync(acctDir, path.join(outside, 'innocent'));
   const viaLink = await h.call('get_attachment', { account: 'work', messageId: 'm', attachmentId: 'a', savePath: path.join(outside, 'innocent', 'token.json') });
-  assert.match(viaLink.body.error, /inside gmail-max's own configuration/);
+  assert.match(viaLink.body.error, /outside the save folders/, 'the symlink resolves out of the save folder');
   assert.ok(!fs.existsSync(path.join(acctDir, 'token.json')));
 
   const existing = path.join(outside, 'notes.txt');
@@ -71,6 +71,22 @@ test('1: savePath through a symlink into an account folder is refused; existing 
   const ok = await h.call('get_attachment', { account: 'work', messageId: 'm', attachmentId: 'a', savePath: fresh });
   assert.equal(ok.isError, false);
   assert.equal(fs.readFileSync(fresh, 'utf8'), 'hello');
+});
+
+test('1: a save folder set to the config directory still cannot reach gmail-max\'s own files', async (t) => {
+  const mailboxes = DEFAULT_MAILBOXES();
+  mailboxes.work.attachmentData = b64('x');
+  const cfgLike = tempDir('gmail-max-cfg-');
+  t.after(() => fs.rmSync(cfgLike, { recursive: true, force: true }));
+  const h = await startMulti({ mailboxes });
+  t.after(h.close);
+  writeAccounts(h.configDir, {
+    personal: { purpose: 'Main inbox.', permissions: { send: 'ask' } },
+    work: { purpose: 'Work inbox.', permissions: { send: 'allow' } },
+  }, { saveFolders: [h.configDir] });
+  const r = await h.call('get_attachment', { account: 'work', messageId: 'm', attachmentId: 'a', savePath: 'planted.json' });
+  assert.match(r.body.error, /inside gmail-max's own configuration/);
+  assert.ok(!fs.existsSync(path.join(h.configDir, 'planted.json')));
 });
 
 test('1: an attachment path inside the config or an account folder is refused before any dialog', async (t) => {
@@ -132,7 +148,7 @@ test('2: every header, attachment source and both bodies in the raw MIME appear 
   assert.match(dialog, /WIRE 5000 TO ACCOUNT 12345/, 'the HTML the recipient sees');
   assert.match(dialog, /plain-text version differs/);
   assert.match(dialog, /See you at noon\./);
-  assert.ok(dialog.includes(`menu.pdf (read from ${att}, 7 bytes)`));
+  assert.ok(dialog.includes(`menu.pdf (application/pdf, read from ${att}, 7 bytes)`));
   assert.match(raw, /filename="menu\.pdf"/);
 });
 

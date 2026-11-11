@@ -14,9 +14,10 @@ export function tempDir(prefix = 'gmail-max-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-export function writeAccounts(configDir, accounts) {
+export function writeAccounts(configDir, accounts, { saveFolders } = {}) {
   fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(path.join(configDir, 'accounts.json'), JSON.stringify({ version: 1, accounts }, null, 2));
+  const data = saveFolders ? { version: 1, saveFolders, accounts } : { version: 1, accounts };
+  fs.writeFileSync(path.join(configDir, 'accounts.json'), JSON.stringify(data, null, 2));
 }
 
 export const DEFAULT_ACCOUNTS = {
@@ -37,9 +38,13 @@ export const DEFAULT_MAILBOXES = () => ({
  *              function(request) -> client declares form elicitation and answers with it
  *   askTimeoutMs
  */
-export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), elicit, askTimeoutMs, fakeOptions } = {}) {
+// saveFolders: always written to accounts.json by the harness (default: a fresh
+// temp folder), so no in-process test ever falls back to the real
+// ~/Downloads/gmail-max of the machine running the tests.
+export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFAULT_MAILBOXES(), elicit, askTimeoutMs, fakeOptions, saveFolders } = {}) {
   const configDir = tempDir();
-  writeAccounts(configDir, accounts);
+  const saveDir = saveFolders ? null : tempDir('gmail-max-saves-');
+  writeAccounts(configDir, accounts, { saveFolders: saveFolders || [saveDir] });
   const fake = makeFakeGmail(mailboxes, fakeOptions);
   setGmailClientFactory(fake.factory);
 
@@ -69,9 +74,10 @@ export async function startMulti({ accounts = DEFAULT_ACCOUNTS, mailboxes = DEFA
     await server.close();
     setGmailClientFactory(null);
     fs.rmSync(configDir, { recursive: true, force: true });
+    if (saveDir) fs.rmSync(saveDir, { recursive: true, force: true });
   }
 
-  return { server, client, configDir, fake, elicitations, listChanged, call, close };
+  return { server, client, configDir, saveDir, fake, elicitations, listChanged, call, close };
 }
 
 function parse(text) {

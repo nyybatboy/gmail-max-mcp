@@ -102,10 +102,17 @@ export function makeFakeGmail(mailboxes, { jitter = false, mailboxFor } = {}) {
             box.drafts[id] = { id, message: { id: `m-${id}`, raw: p.requestBody.message.raw } };
             return ok({ id, message: { id: `m-${id}`, labelIds: ['DRAFT'] } });
           },
+          // format 'raw' returns the message bytes. Drafts stored as a parsed
+          // payload get a stand-in raw derived from the whole payload, so any
+          // change to the payload changes the raw, as with real Gmail.
           get: async (p) => {
             rec('drafts.get', p);
             const d = box.drafts[p.id];
             if (!d) throw notFound(`draft ${p.id}`);
+            if (p.format === 'raw') {
+              const raw = d.message.raw ?? Buffer.from(JSON.stringify(d.message.payload)).toString('base64url');
+              return ok({ id: d.id, message: { id: d.message.id, raw } });
+            }
             return ok(d);
           },
           // Replaces the draft: new message id, headers parsed from the raw, a marked body.

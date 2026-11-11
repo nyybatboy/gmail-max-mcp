@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { confirm } from '../lib/prompt.js';
+import { draftFingerprint } from '../lib/server.js';
 import {
   runAuthFlow,
   CONFIG_DIR,
@@ -16,9 +17,10 @@ import {
   accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
   addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary, accountContext,
   groupOf, GROUPS, MAX_ACCOUNTS, parseAccounts, serializeAccounts,
+  effectiveSaveFolders, addSaveFolder, removeSaveFolder,
 } from '../lib/accounts.js';
 import {
-  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText, validateComposeArgs, describeOutgoing,
+  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText, validateComposeArgs,
 } from '../lib/approval.js';
 
 const PROFILE_CACHE = path.join(CONFIG_DIR, 'profile.json');
@@ -133,6 +135,9 @@ Multiple accounts (up to ${MAX_ACCOUNTS}; on once ${path.join(CONFIG_DIR, 'accou
   permissions set <label> <group|tool> allow|ask|block
   permissions clear <label> <group|tool>        Back to the group or built-in default
   permissions block-all-sends                   One-time: set send to block on every account
+  save-folders list | add <folder> | remove <folder>
+                                                Where get-attachment may save (default ~/Downloads/gmail-max);
+                                                a relative --save-path goes into the first folder
   Groups: ${Object.keys(GROUPS).join(', ')}
   In multi-account mode every Gmail command needs --account <label> (no default).
   "ask" prompts in an interactive terminal and refuses otherwise; "block" refuses.
@@ -334,6 +339,9 @@ const CLI_TOOL_EXCEPTIONS = {
   'batch-modify': 'batch_modify_messages',
   'batch-delete': 'batch_delete_messages',
 };
+// Commands that manage accounts.json. No Gmail calls, no JSON input.
+const MANAGE_COMMANDS = new Set(['accounts', 'permissions', 'save-folders']);
+
 // Commands that are not Gmail tools and need no permission check.
 const NO_TOOL_COMMANDS = new Set(['auth', 'auth-status']);
 // CLI subcommands whose arguments compose a message (validated like the server).
@@ -377,8 +385,10 @@ async function enforcePermission({ cmd, account, json, flags, ctx }) {
     try { from = await G.getDefaultFromAddress(); } catch { /* informational */ }
     outgoing = outgoingFromArgs(json || {}, from);
   }
+  let approvedRaw = null;
   if (tool === 'send_draft') {
     draft = await G.getDraft({ id: flags.id, format: 'full' });
+    approvedRaw = await G.getDraft({ id: flags.id, format: 'raw' });
     outgoing = outgoingFromDraft(draft);
   }
   const message = approvalMessage({ tool, label: account.label, address, outgoing, args: json || flags });
@@ -386,9 +396,8 @@ async function enforcePermission({ cmd, account, json, flags, ctx }) {
   if (answer === null) throw refuse('no-answer');
   if (!answer) throw refuse('declined');
   if (draft) {
-    const now = await G.getDraft({ id: flags.id, format: 'full' });
-    if (now?.message?.id !== draft?.message?.id
-      || describeOutgoing(outgoingFromDraft(now)) !== describeOutgoing(outgoing)) throw refuse('changed');
+    const now = await G.getDraft({ id: flags.id, format: 'raw' });
+    if (draftFingerprint(now) !== draftFingerprint(approvedRaw)) throw refuse('changed');
   }
 }
 
@@ -469,6 +478,30 @@ async function manage(cmd, args) {
     throw new Error(`Unknown: accounts ${sub}. Use list, add, remove.`);
   }
 
+  if (cmd === 'save-folders') {
+    if (!cfg) throw new Error(`Single-account mode: no ${file}. Save folders apply only in multi-account mode.`);
+    const show = (c) => ({
+      saveFolders: effectiveSaveFolders(c),
+      source: c.saveFolders?.length ? 'accounts.json' : 'default (no saveFolders key in accounts.json)',
+      note: 'get_attachment saves only inside these folders (create-only); a relative savePath goes into the first one.',
+    });
+    if (!sub || sub === 'list') return show(cfg);
+    const folder = rest[0];
+    if (!folder) throw new Error(`Usage: save-folders ${sub} <absolute folder>`);
+    const abs = folder.startsWith('~') ? folder : path.resolve(folder);
+    if (sub === 'add') {
+      const next = addSaveFolder(cfg, abs);
+      saveAccounts(CONFIG_DIR, next);
+      return { ok: true, added: abs, ...show(next) };
+    }
+    if (sub === 'remove') {
+      const next = removeSaveFolder(cfg, abs);
+      saveAccounts(CONFIG_DIR, next);
+      return { ok: true, removed: abs, ...show(next) };
+    }
+    throw new Error(`Unknown: save-folders ${sub}. Use list, add, remove.`);
+  }
+
   // permissions
   if (!cfg) throw new Error(`Single-account mode: no ${file}. Add an account first:  accounts add <label> --purpose "..."`);
   if (!sub || sub === 'show') {
@@ -494,7 +527,7 @@ async function manage(cmd, args) {
     if (!entry) throw new Error(`No account "${label}".`);
     const permissions = { ...entry.permissions };
     delete permissions[key];
-    const next = { version: 1, accounts: cfg.accounts.map((a) => (a.label === label ? { ...a, permissions } : a)) };
+    const next = { ...cfg, accounts: cfg.accounts.map((a) => (a.label === label ? { ...a, permissions } : a)) };
     saveAccounts(CONFIG_DIR, next);
     return { ok: true, account: label, cleared: key, permissions: permissionSummary(findAccount(next, label)) };
   }
@@ -522,7 +555,7 @@ async function main() {
   let json = null;
   if (args.flags.json) {
     json = JSON.parse(args.flags.json);
-  } else if (cmd !== 'accounts' && cmd !== 'permissions') {
+  } else if (!MANAGE_COMMANDS.has(cmd)) {
     // accounts / permissions never take JSON input: do not wait on a piped stdin.
     const stdin = await readStdin();
     if (stdin) json = JSON.parse(stdin);
@@ -538,7 +571,7 @@ async function main() {
   }
 
   try {
-    if (cmd === 'accounts' || cmd === 'permissions') {
+    if (MANAGE_COMMANDS.has(cmd)) {
       out(await manage(cmd, args));
       return;
     }

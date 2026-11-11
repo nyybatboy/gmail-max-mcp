@@ -60,7 +60,7 @@ test('1: the CLI get-attachment refuses a save path inside the config directory'
   const before = fs.readFileSync(path.join(s.cfg, 'accounts.json'), 'utf8');
   const r = s.cli('get-attachment', '--account', 'work', '--message-id', 'm', '--attachment-id', 'a', '--save-path', path.join(s.cfg, 'accounts.json'));
   assert.equal(r.code, 1);
-  assert.match(r.err.error, /inside gmail-max's own configuration/);
+  assert.match(r.err.error, /outside the save folders/);
   assert.doesNotMatch(r.rawErr, /Not authenticated/);
   assert.equal(fs.readFileSync(path.join(s.cfg, 'accounts.json'), 'utf8'), before);
 });
