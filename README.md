@@ -83,6 +83,7 @@ Tools are grouped so the file stays short. A setting can name a group or one too
 ```json
 {
   "version": 1,
+  "saveFolders": ["~/Downloads/gmail-max"],
   "accounts": {
     "personal": { "purpose": "Main inbox.", "dir": "/path/to/existing/folder", "permissions": { "send": "ask", "routing": "block" } },
     "work":     { "purpose": "Work inbox: clients and invoices.", "permissions": { "send": "allow", "delete_thread": "block" } }
@@ -98,17 +99,27 @@ node bin/gmail-cli.js permissions show [<label>]
 node bin/gmail-cli.js permissions set <label> <group|tool> allow|ask|block
 node bin/gmail-cli.js permissions clear <label> <group|tool>
 node bin/gmail-cli.js permissions block-all-sends
+node bin/gmail-cli.js save-folders list | add <folder> | remove <folder>
 ```
 
 `block-all-sends` is a one-time action, not a switch: it sets `send` to `block` on every account (clearing per-tool send overrides) and stops. Each account can be changed again individually afterwards.
 
-**The ask dialog.** For a send it shows everything that leaves the account: the account and its address, every header in the order it is sent (From, To, Cc, Bcc, Reply-To, Subject, In-Reply-To, References and any extra header; a header that appears twice is flagged), every attachment and inline image with where its bytes come from and their size, and the body the recipient will see (the HTML when there is one) with its total length and the first 500 characters. When the plain-text version differs from the HTML, the dialog says so and shows both. For `send_draft` the server reads the draft first and shows what it actually contains, to the same standard; after you approve it reads the draft again and refuses if it changed in the meantime. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask. If the client abandons the tool call while the dialog is open, a later approval does nothing.
+**The ask dialog.** For a send it shows everything that leaves the account: the account and its address, every header in the order it is sent (From, To, Cc, Bcc, Reply-To, Subject, In-Reply-To, References and any extra header; a header that appears twice is flagged), every attachment and inline image with its content type, where its bytes come from and their size, and the body the recipient will see (the HTML when there is one) with its total length and the first 500 characters. The HTML preview errs towards showing too much: only real tags are removed, text hidden by CSS is shown (with a note), every link target and remote resource (`href`, `src`, `srcset`, `background`, CSS `url()`, ...) is listed under the body, and markup a mail app might treat unusually (an unterminated comment, style or script, CDATA) adds a warning and the HTML source. When the plain-text version differs from the HTML, the dialog says so and shows both. For `send_draft` the server reads the draft first and shows what it actually contains, to the same standard, every part listed with its type; after you approve it compares a hash of the draft's complete raw message with the one you approved and refuses if anything changed. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask. If the client abandons the tool call while the dialog is open, a later approval does nothing.
 
 For other actions set to `ask`, the dialog prints the deciding fields first and in full (for example a filter's forward target, a send-as reply-to address, a delegate, the number of messages a batch delete touches), counts every list, and truncates only the rest. Secrets and binary data are never shown.
 
-**Composing in multi-account mode.** To keep the dialog honest, a compose call is refused if a header-bound argument contains a line break, if `headers` tries to set To, Cc, Bcc, From, Reply-To, Sender, Subject or the MIME structure headers (use the dedicated arguments), or if an attachment name contains a quote.
+**Composing in multi-account mode.** To keep the dialog honest, a compose call is refused if a header-bound argument contains a line break; if `headers` tries to set To, Cc, Bcc, From, Reply-To, Sender, Subject or the MIME structure headers (use the dedicated arguments); if an address is not a string, `{ email, name }` or a flat list of those; if an attachment name contains a quote; if a `mimeType` is not a plain `type/subtype` (no parameters, not `multipart/*` or `message/*`); if inline `contentBase64` is not base64 without spaces; or if an inline image is not `image/*` (give `mimeType` when supplying base64).
 
-**gmail-max's own files are off limits.** In multi-account mode, `get_attachment` refuses a `savePath` inside the config directory, any account folder, or the package's own folder (symlinks are resolved), and never overwrites an existing file. Attachment and inline-image `path` reads inside the config directory or an account folder are refused, so a token or the accounts file cannot be mailed. Single-account mode is unchanged.
+**Saving attachments: save folders only.** In multi-account mode, `get_attachment` with `savePath` writes only inside the **save folders**, which this narrows on purpose. Without that, a save could create a file that runs later (a shell startup file, a login item, an MCP client's config) and so change the permissions without a shell. The rules:
+- The default save folder is `~/Downloads/gmail-max`, created (mode 700) the first time something is saved there.
+- A **relative** `savePath` (for example `invoices/march.pdf`) is saved under the **first** save folder; it no longer means "relative to the server's working directory". An absolute `savePath` must be inside one of the save folders after resolving symlinks.
+- A save never overwrites anything (create-only), never lands in the config directory, an account folder or the package folder even if a save folder contains them, and is refused if the path has a `..` segment. Subfolders inside a save folder must already exist.
+- To widen it, list more folders: `gmail-cli save-folders add <folder>` (or `remove`, `list`), or edit `accounts.json`: `"saveFolders": ["~/Downloads/gmail-max", "~/Documents/Mail"]` (absolute paths or `~/...`; the first is where relative paths go; listing any folder replaces the default). Only you can change this; no tool writes it. Adding a broad folder such as your home directory brings the "file that runs later" risk back.
+- `list_accounts` and the `savePath` description tell the model where it can save.
+
+Single-account mode is unchanged: `savePath` writes wherever it points, as before.
+
+**gmail-max's own files are off limits.** In multi-account mode, attachment and inline-image `path` reads inside the config directory or an account folder are refused (symlinks resolved, `..` refused), so a token or the accounts file cannot be mailed.
 
 **When the client cannot ask** (no elicitation support, a headless run, or a client that cancels or never answers): the call is refused with the reason. For a send, the refusal tells the model to leave a draft with `create_draft` instead (when drafts are allowed on that account) so you can send it from Gmail. The server never creates that draft on its own.
 
@@ -334,6 +345,7 @@ All stored at `~/.gmail-mcp/`, mode 700 directory:
 - `profile.json` (mode 600) — `{ email, historyId, cachedAt }`, 7-day TTL. `whoami --fresh` forces a refetch.
 - `accounts.json` (mode 600, multi-account mode only) — account labels, purposes, folders and permissions. No secrets.
 - `accounts/<label>/` (multi-account mode, unless the account sets its own `dir`) — that account's `token.json`, `profile.json`, and optionally its own `credentials.json`.
+- `~/Downloads/gmail-max/` (multi-account mode, default save folder) — attachments saved with `get_attachment`; see [Multiple accounts](#multiple-accounts).
 
 None of these are committed; the project's `.gitignore` covers `credentials.json`, `token.json`, `profile.json`, and `client_secret*.json` at any path.
 
