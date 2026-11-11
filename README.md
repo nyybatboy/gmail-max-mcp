@@ -112,6 +112,7 @@ Anything not listed is on. `dir` is optional (default `<config dir>/accounts/<la
 - Turning off `send` does not turn off `update_vacation` (group `settings`), which sends automatic replies in your name to whoever writes in. Turn `settings` or `update_vacation` off too if that matters.
 - `delete_draft` and `update_draft` (group `draft`) can overwrite or delete a draft you wrote by hand.
 - Switches are per account, not per piece of content: an account where sending is on can carry text the model read from an account where it is off.
+- Turning `read` off stops the reading tools, but every result still names the account's address (the server looks it up once), because that address is how you and the model check which mailbox a call acted on. `list_accounts` leaves the address out for such an account.
 
 **Want switches with a single account?** Add just that one account; multi-account mode works with one.
 

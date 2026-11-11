@@ -12,7 +12,7 @@ import {
 import * as G from '../lib/gmail.js';
 import { runWithAccount } from '../lib/context.js';
 import {
-  accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
+  accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, updateAccounts, accountPaths, findAccount,
   addAccount, removeAccount, setPermission, turnOffAllSends, resolvePermission, permissionSummary, accountContext,
   groupOf, GROUPS, MAX_ACCOUNTS, parseAccounts, serializeAccounts,
 } from '../lib/accounts.js';
@@ -408,7 +408,9 @@ async function manage(cmd, args) {
         await runWithAccount(paths, () => runAuthFlow({ headless: f.headless === true }));
         authorized = true;
       }
-      saveAccounts(CONFIG_DIR, next);
+      // The consent can take minutes: apply the addition to the file as it is now.
+      if (exists) updateAccounts(CONFIG_DIR, (fresh) => addAccount(fresh, { label, purpose: f.purpose, dir }));
+      else saveAccounts(CONFIG_DIR, next);
       return {
         ok: true,
         account: label,
@@ -424,7 +426,7 @@ async function manage(cmd, args) {
       const entry = findAccount(cfg, label);
       if (!entry) throw new Error(`No account "${label}".`);
       if (cfg.accounts.length === 1) throw new Error(`"${label}" is the last account. To return to single-account mode, delete ${file}.`);
-      saveAccounts(CONFIG_DIR, removeAccount(cfg, label));
+      updateAccounts(CONFIG_DIR, (fresh) => removeAccount(fresh, label));
       const deleted = [];
       if (f['delete-token']) {
         const p = accountPaths(CONFIG_DIR, entry);
@@ -451,14 +453,12 @@ async function manage(cmd, args) {
   if (sub === 'set') {
     const [label, key, state] = rest;
     if (!label || !key || !state) throw new Error('Usage: permissions set <label|all> <group|tool> on|off');
-    const { cfg: next, changes } = setPermission(cfg, label, key, state);
-    saveAccounts(CONFIG_DIR, next);
+    const { cfg: next, changes } = updateAccounts(CONFIG_DIR, (fresh) => setPermission(fresh, label, key, state));
     const touched = changes.map((c) => c.label);
     return { ok: true, changes, accounts: next.accounts.filter((a) => touched.includes(a.label)).map((a) => ({ label: a.label, ...permissionSummary(a) })) };
   }
   if (sub === 'all-sends-off') {
-    const { cfg: next, changes } = turnOffAllSends(cfg);
-    saveAccounts(CONFIG_DIR, next);
+    const { changes } = updateAccounts(CONFIG_DIR, (fresh) => turnOffAllSends(fresh));
     return {
       ok: true,
       note: 'One-time action: sending is now off on every account. Turn any account back on with  permissions set <label> send on.',
