@@ -1,0 +1,2288 @@
+{
+  "serverVersion": {
+    "name": "gmail-max",
+    "version": "0.1.0"
+  },
+  "serverCapabilities": {
+    "tools": {}
+  },
+  "instructions": null,
+  "tools": {
+    "tools": [
+      {
+        "name": "whoami",
+        "description": "Return Gmail profile (email, message totals, history id).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "list_messages",
+        "description": "Search/list messages. q uses Gmail search syntax (from:, to:, subject:, has:attachment, newer_than:7d, etc.).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            },
+            "labelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "maxResults": {
+              "type": "integer"
+            },
+            "pageToken": {
+              "type": "string"
+            },
+            "includeSpamTrash": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_message",
+        "description": "Get a single message by id. format: full|metadata|minimal|raw.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "full",
+                "metadata",
+                "minimal",
+                "raw"
+              ]
+            },
+            "metadataHeaders": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "batch_get_messages",
+        "description": "Fetch many messages in parallel with bounded concurrency. Returns { messages, errors }. Use this instead of looping get_message — one tool call instead of N round-trips for the agent.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "full",
+                "metadata",
+                "minimal",
+                "raw"
+              ]
+            },
+            "metadataHeaders": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "concurrency": {
+              "type": "integer",
+              "description": "Parallel fetch limit (default 10)"
+            }
+          },
+          "required": [
+            "ids"
+          ]
+        }
+      },
+      {
+        "name": "send_message",
+        "description": "Send a message. A text-only body auto-renders to a multipart/alternative email (Gmail-style HTML + plain-text fallback); pass html to override, or plaintextOnly:true to force text/plain. Supports To/Cc/Bcc, attachments (path or base64), inline images (Content-ID; reference as src=\"cid:...\"), threaded replies (set inReplyTo, references, threadId).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "cc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "bcc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "from": {
+              "description": "Override From (must be a verified send-as alias)",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "replyTo": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "subject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "Plaintext body. Write it the way a person types plainly into Gmail compose: one continuous line per paragraph, a blank line between paragraphs. It is automatically rendered into a multipart/alternative email with a Gmail-style HTML part (so it reflows on every screen) plus this text as the plain-text fallback. You do not need to write HTML."
+            },
+            "html": {
+              "type": "string",
+              "description": "Optional explicit HTML body. Supply this ONLY when you deliberately want custom HTML; it overrides the automatic rendering of `text`. Provide both text and html to set the plain fallback yourself."
+            },
+            "plaintextOnly": {
+              "type": "boolean",
+              "description": "Set true to send a bare text/plain message with no HTML part (e.g. mailing lists, code-only mail). Default false: a text-only body auto-renders to multipart/alternative."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local file path. Read at send/draft time."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Inline base64 contents if no path"
+                  }
+                }
+              }
+            },
+            "inlineImages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local image file path."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Base64 image data if no path."
+                  },
+                  "cid": {
+                    "type": "string",
+                    "description": "Content-ID (without angle brackets). Reference in HTML as src=\"cid:<value>\"."
+                  }
+                }
+              },
+              "description": "Inline images embedded via Content-ID. Each needs a cid; reference in your HTML as <img src=\"cid:mycid\">. Wraps the body in multipart/related."
+            },
+            "inReplyTo": {
+              "type": "string",
+              "description": "Message-Id of parent (for threaded replies)"
+            },
+            "references": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "description": "Gmail threadId — required to dock the message into an existing thread"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "modify_message",
+        "description": "Add/remove labels on a message. Use INBOX, UNREAD, STARRED, or any label id from list_labels.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "addLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "removeLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "batch_modify_messages",
+        "description": "Batch add/remove labels across many message ids.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "addLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "removeLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "ids"
+          ]
+        }
+      },
+      {
+        "name": "batch_delete_messages",
+        "description": "PERMANENTLY delete (skip Trash) up to 1000 messages by id. Irreversible.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "ids"
+          ]
+        }
+      },
+      {
+        "name": "trash_message",
+        "description": "Move a message to Trash.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "untrash_message",
+        "description": "Restore a message from Trash.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "delete_message",
+        "description": "PERMANENTLY delete a message. Irreversible.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "get_attachment",
+        "description": "Download an attachment. If savePath provided, writes to disk and returns metadata; otherwise returns base64 in .data.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "savePath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "messageId",
+            "attachmentId"
+          ]
+        }
+      },
+      {
+        "name": "list_drafts",
+        "description": "List drafts. q uses Gmail search syntax (constrained to drafts).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            },
+            "maxResults": {
+              "type": "integer"
+            },
+            "pageToken": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_draft",
+        "description": "Get a draft by id.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "create_draft",
+        "description": "Create a draft. Same body shape as send_message, plus optional useSignature (default true) to auto-append the user's default Gmail signature from send-as. For threaded reply drafts, use create_reply_draft instead — it handles In-Reply-To/References/threadId AND quoted parent body.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "cc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "bcc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "from": {
+              "description": "Override From (must be a verified send-as alias)",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "replyTo": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "subject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "Plaintext body. Write it the way a person types plainly into Gmail compose: one continuous line per paragraph, a blank line between paragraphs. It is automatically rendered into a multipart/alternative email with a Gmail-style HTML part (so it reflows on every screen) plus this text as the plain-text fallback. You do not need to write HTML."
+            },
+            "html": {
+              "type": "string",
+              "description": "Optional explicit HTML body. Supply this ONLY when you deliberately want custom HTML; it overrides the automatic rendering of `text`. Provide both text and html to set the plain fallback yourself."
+            },
+            "plaintextOnly": {
+              "type": "boolean",
+              "description": "Set true to send a bare text/plain message with no HTML part (e.g. mailing lists, code-only mail). Default false: a text-only body auto-renders to multipart/alternative."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local file path. Read at send/draft time."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Inline base64 contents if no path"
+                  }
+                }
+              }
+            },
+            "inlineImages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local image file path."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Base64 image data if no path."
+                  },
+                  "cid": {
+                    "type": "string",
+                    "description": "Content-ID (without angle brackets). Reference in HTML as src=\"cid:<value>\"."
+                  }
+                }
+              },
+              "description": "Inline images embedded via Content-ID. Each needs a cid; reference in your HTML as <img src=\"cid:mycid\">. Wraps the body in multipart/related."
+            },
+            "inReplyTo": {
+              "type": "string",
+              "description": "Message-Id of parent (for threaded replies)"
+            },
+            "references": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "description": "Gmail threadId — required to dock the message into an existing thread"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "useSignature": {
+              "type": "boolean",
+              "description": "Auto-append the user's Gmail signature from send-as (default: true). Set false for raw drafts where the body is already complete."
+            }
+          },
+          "required": [
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "create_reply_draft",
+        "description": "Create a draft as a threaded reply to an existing message. Pulls In-Reply-To, References, threadId, and Re: subject from the parent so the draft appears inside the original Gmail thread. AUTO-INCLUDES the parent body as a Gmail-style quote (gmail_quote/gmail_attr/blockquote markup, byte-matched to Gmail web UI) AND auto-appends the user's send-as signature, so the rendered draft looks like a normal Gmail reply. THIS IS THE ONE THE DEFAULT GMAIL MCP CANNOT DO.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "toMessageId": {
+              "type": "string",
+              "description": "Gmail id of the message you are replying to"
+            },
+            "replyAll": {
+              "type": "boolean",
+              "description": "If true, Cc all original recipients"
+            },
+            "body": {
+              "type": "string",
+              "description": "Plaintext reply body, written plainly (one line per paragraph, blank line between). Auto-rendered to a Gmail-style HTML reply with a plain-text fallback; you do not need to write HTML."
+            },
+            "html": {
+              "type": "string",
+              "description": "Optional explicit HTML body; overrides the automatic rendering of `body`."
+            },
+            "plaintextOnly": {
+              "type": "boolean",
+              "description": "Force a bare text/plain reply (no HTML part). Default false."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local file path. Read at send/draft time."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Inline base64 contents if no path"
+                  }
+                }
+              }
+            },
+            "inlineImages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local image file path."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Base64 image data if no path."
+                  },
+                  "cid": {
+                    "type": "string",
+                    "description": "Content-ID (without angle brackets). Reference in HTML as src=\"cid:<value>\"."
+                  }
+                }
+              },
+              "description": "Inline images via Content-ID. Reference in html as <img src=\"cid:mycid\">."
+            },
+            "extraTo": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "extraCc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "extraBcc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "fromAlias": {
+              "description": "Optional verified send-as alias",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "includeQuotedParent": {
+              "type": "boolean",
+              "description": "Append parent body as quoted reply (default: true)."
+            },
+            "useSignature": {
+              "type": "boolean",
+              "description": "Auto-append the user's Gmail signature (default: true)."
+            }
+          },
+          "required": [
+            "toMessageId"
+          ]
+        }
+      },
+      {
+        "name": "update_draft",
+        "description": "Replace a draft with new content. Pass id plus the same fields as create_draft.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "cc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "bcc": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "email"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "from": {
+              "description": "Override From (must be a verified send-as alias)",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "replyTo": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              ]
+            },
+            "subject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "Plaintext body. Write it the way a person types plainly into Gmail compose: one continuous line per paragraph, a blank line between paragraphs. It is automatically rendered into a multipart/alternative email with a Gmail-style HTML part (so it reflows on every screen) plus this text as the plain-text fallback. You do not need to write HTML."
+            },
+            "html": {
+              "type": "string",
+              "description": "Optional explicit HTML body. Supply this ONLY when you deliberately want custom HTML; it overrides the automatic rendering of `text`. Provide both text and html to set the plain fallback yourself."
+            },
+            "plaintextOnly": {
+              "type": "boolean",
+              "description": "Set true to send a bare text/plain message with no HTML part (e.g. mailing lists, code-only mail). Default false: a text-only body auto-renders to multipart/alternative."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local file path. Read at send/draft time."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Inline base64 contents if no path"
+                  }
+                }
+              }
+            },
+            "inlineImages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Local image file path."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "description": "Base64 image data if no path."
+                  },
+                  "cid": {
+                    "type": "string",
+                    "description": "Content-ID (without angle brackets). Reference in HTML as src=\"cid:<value>\"."
+                  }
+                }
+              },
+              "description": "Inline images embedded via Content-ID. Each needs a cid; reference in your HTML as <img src=\"cid:mycid\">. Wraps the body in multipart/related."
+            },
+            "inReplyTo": {
+              "type": "string",
+              "description": "Message-Id of parent (for threaded replies)"
+            },
+            "references": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "description": "Gmail threadId — required to dock the message into an existing thread"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "send_draft",
+        "description": "Send an existing draft.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "delete_draft",
+        "description": "Delete a draft.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_threads",
+        "description": "List threads matching a query.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            },
+            "labelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "maxResults": {
+              "type": "integer"
+            },
+            "pageToken": {
+              "type": "string"
+            },
+            "includeSpamTrash": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_thread",
+        "description": "Get a thread by id with all messages.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "metadataHeaders": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "batch_get_threads",
+        "description": "Fetch many threads in parallel with bounded concurrency. Returns { threads, errors }. Most useful for analysis flows that need full conversation context across many threads at once.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "full",
+                "metadata",
+                "minimal"
+              ]
+            },
+            "metadataHeaders": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "concurrency": {
+              "type": "integer",
+              "description": "Parallel fetch limit (default 10)"
+            }
+          },
+          "required": [
+            "ids"
+          ]
+        }
+      },
+      {
+        "name": "modify_thread",
+        "description": "Add/remove labels on a thread (applies to all messages).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "addLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "removeLabelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "trash_thread",
+        "description": "Move a thread to Trash.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "untrash_thread",
+        "description": "Restore a thread from Trash.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "delete_thread",
+        "description": "PERMANENTLY delete a thread.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_labels",
+        "description": "List all labels (system + user).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_label",
+        "description": "Get a label by id.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "create_label",
+        "description": "Create a label. color: { backgroundColor, textColor } (hex; must be from Gmail palette).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "labelListVisibility": {
+              "type": "string",
+              "enum": [
+                "labelShow",
+                "labelShowIfUnread",
+                "labelHide"
+              ]
+            },
+            "messageListVisibility": {
+              "type": "string",
+              "enum": [
+                "show",
+                "hide"
+              ]
+            },
+            "color": {
+              "type": "object",
+              "properties": {
+                "backgroundColor": {
+                  "type": "string"
+                },
+                "textColor": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "name": "update_label",
+        "description": "Update a label (name, visibility, color).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "labelListVisibility": {
+              "type": "string"
+            },
+            "messageListVisibility": {
+              "type": "string"
+            },
+            "color": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "delete_label",
+        "description": "Delete a label.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_filters",
+        "description": "List Gmail filters.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_filter",
+        "description": "Get a filter by id.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "create_filter",
+        "description": "Create a filter. criteria: {from, to, subject, query, hasAttachment, ...}; action: {addLabelIds, removeLabelIds, forward}.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "criteria": {
+              "type": "object"
+            },
+            "action": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "criteria",
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "delete_filter",
+        "description": "Delete a filter.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "get_vacation",
+        "description": "Get vacation auto-responder settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "update_vacation",
+        "description": "Update vacation auto-responder.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "enableAutoReply": {
+              "type": "boolean"
+            },
+            "responseSubject": {
+              "type": "string"
+            },
+            "responseBodyPlainText": {
+              "type": "string"
+            },
+            "responseBodyHtml": {
+              "type": "string"
+            },
+            "restrictToContacts": {
+              "type": "boolean"
+            },
+            "restrictToDomain": {
+              "type": "boolean"
+            },
+            "startTime": {
+              "type": "string",
+              "description": "epoch ms"
+            },
+            "endTime": {
+              "type": "string",
+              "description": "epoch ms"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_imap",
+        "description": "Get IMAP settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "update_imap",
+        "description": "Update IMAP settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "autoExpunge": {
+              "type": "boolean"
+            },
+            "expungeBehavior": {
+              "type": "string"
+            },
+            "maxFolderSize": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_pop",
+        "description": "Get POP settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "update_pop",
+        "description": "Update POP settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "accessWindow": {
+              "type": "string"
+            },
+            "disposition": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_language",
+        "description": "Get language setting.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "update_language",
+        "description": "Update language setting.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "displayLanguage": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_auto_forwarding",
+        "description": "Get auto-forwarding settings.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "update_auto_forwarding",
+        "description": "Update auto-forwarding (forward all incoming mail).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "emailAddress": {
+              "type": "string"
+            },
+            "disposition": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "list_send_as",
+        "description": "List send-as aliases (each carries its own signature).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_send_as",
+        "description": "Get a send-as alias by email.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "create_send_as",
+        "description": "Create a send-as alias. WORKSPACE-ONLY — fails with 403 \"domain-wide authority\" on personal Gmail accounts. For personal Gmail, direct the user to Gmail web UI Settings → Accounts → Send mail as.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "replyToAddress": {
+              "type": "string"
+            },
+            "signature": {
+              "type": "string",
+              "description": "HTML signature"
+            },
+            "isDefault": {
+              "type": "boolean"
+            },
+            "treatAsAlias": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "update_send_as",
+        "description": "Update a send-as alias (e.g. change the signature).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "replyToAddress": {
+              "type": "string"
+            },
+            "signature": {
+              "type": "string"
+            },
+            "isDefault": {
+              "type": "boolean"
+            },
+            "treatAsAlias": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "delete_send_as",
+        "description": "Delete a send-as alias. WORKSPACE-ONLY — fails on personal Gmail accounts. Use Gmail web UI Settings → Accounts → Send mail as instead.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "verify_send_as",
+        "description": "Send the verification email for a send-as alias.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "list_forwarding_addresses",
+        "description": "List approved forwarding addresses.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_forwarding_address",
+        "description": "Get a forwarding address.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "forwardingEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "forwardingEmail"
+          ]
+        }
+      },
+      {
+        "name": "create_forwarding_address",
+        "description": "Add a forwarding address (sends a verification email).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "forwardingEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "forwardingEmail"
+          ]
+        }
+      },
+      {
+        "name": "delete_forwarding_address",
+        "description": "Remove a forwarding address.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "forwardingEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "forwardingEmail"
+          ]
+        }
+      },
+      {
+        "name": "list_delegates",
+        "description": "List delegate accounts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_delegate",
+        "description": "Get a delegate.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "delegateEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "delegateEmail"
+          ]
+        }
+      },
+      {
+        "name": "create_delegate",
+        "description": "Add a delegate. WORKSPACE-ONLY — fails on personal Gmail accounts (requires service account with domain-wide delegation).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "delegateEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "delegateEmail"
+          ]
+        }
+      },
+      {
+        "name": "delete_delegate",
+        "description": "Remove a delegate. WORKSPACE-ONLY — fails on personal Gmail accounts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "delegateEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "delegateEmail"
+          ]
+        }
+      },
+      {
+        "name": "list_smime",
+        "description": "List S/MIME configs for a send-as alias.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail"
+          ]
+        }
+      },
+      {
+        "name": "get_smime",
+        "description": "Get an S/MIME config.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail",
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "insert_smime",
+        "description": "Upload a PKCS#12 cert as S/MIME for a send-as alias.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "pkcs12": {
+              "type": "string"
+            },
+            "encryptedKeyPassword": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail",
+            "pkcs12"
+          ]
+        }
+      },
+      {
+        "name": "set_default_smime",
+        "description": "Set the default S/MIME for a send-as alias.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail",
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "delete_smime",
+        "description": "Delete an S/MIME config.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sendAsEmail": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sendAsEmail",
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "list_history",
+        "description": "Incremental sync of mailbox changes since startHistoryId. Returns messageAdded/Deleted/LabelAdded/LabelRemoved events.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "startHistoryId": {
+              "type": "string"
+            },
+            "labelId": {
+              "type": "string"
+            },
+            "historyTypes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "messageAdded",
+                  "messageDeleted",
+                  "labelAdded",
+                  "labelRemoved"
+                ]
+              }
+            },
+            "maxResults": {
+              "type": "integer"
+            },
+            "pageToken": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "startHistoryId"
+          ]
+        }
+      },
+      {
+        "name": "watch",
+        "description": "Subscribe to push notifications via a Cloud Pub/Sub topic. Requires Pub/Sub setup; rarely needed for personal use.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "topicName": {
+              "type": "string"
+            },
+            "labelIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "labelFilterAction": {
+              "type": "string",
+              "enum": [
+                "include",
+                "exclude"
+              ]
+            }
+          },
+          "required": [
+            "topicName"
+          ]
+        }
+      },
+      {
+        "name": "stop_watch",
+        "description": "Stop push notifications.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ]
+  },
+  "unknownToolResult": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Unknown tool: no_such_tool"
+      }
+    ],
+    "isError": true
+  },
+  "noTokenResult": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"error\": \"Not authenticated. Run: node bin/gmail-cli.js auth\\n\\nFix:  node bin/gmail-cli.js auth\",\n  \"details\": null\n}"
+      }
+    ],
+    "isError": true
+  }
+}
