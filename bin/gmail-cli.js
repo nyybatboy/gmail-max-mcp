@@ -15,7 +15,7 @@ import { runWithAccount } from '../lib/context.js';
 import {
   accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
   addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary,
-  groupOf, GROUPS, MAX_ACCOUNTS,
+  groupOf, GROUPS, MAX_ACCOUNTS, parseAccounts, serializeAccounts,
 } from '../lib/accounts.js';
 import {
   approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText,
@@ -409,6 +409,8 @@ async function manage(cmd, args) {
       if (typeof f.purpose !== 'string') throw new Error('accounts add needs --purpose "<what this inbox is for>". The model reads it to choose the account.');
       const dir = typeof f.dir === 'string' ? path.resolve(f.dir) : undefined;
       const next = addAccount(cfg, { label, purpose: f.purpose, dir });
+      // Validate the whole file now, before any OAuth consent opens a browser.
+      parseAccounts(serializeAccounts(next), { file, configDir: CONFIG_DIR });
       const entry = findAccount(next, label);
       const paths = accountPaths(CONFIG_DIR, entry);
       let adopted = false;
