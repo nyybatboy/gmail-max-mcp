@@ -55,6 +55,15 @@ test('S1: every link target and remote resource is listed under the body', async
   }
 });
 
+test('the body preview shows an ordinary message whole and says how much of a very long one is cut', async (t) => {
+  const tail = 'PAY 12345 TODAY';
+  const ordinary = await dialogFor(t, { html: `<p>${'word '.repeat(300)}</p><p>${tail}</p>` });
+  assert.ok(ordinary.shown.includes(tail), 'text after character 500 is shown');
+  assert.doesNotMatch(ordinary.shown, /more characters are not shown/);
+  const huge = await dialogFor(t, { html: `<p>${'word '.repeat(2000)}</p><p>${tail}</p>` });
+  assert.match(huge.shown, /\[\d+ more characters are not shown\]/);
+});
+
 test('S1: unusual HTML also shows the source; CSS that can hide text is flagged', async (t) => {
   const unterminated = await dialogFor(t, { html: '<p>See you at noon.</p><style>p{} WIRE 5000 TO ACCOUNT 12345' });
   assert.match(unterminated.shown, /WARNING: unusual HTML \(an unterminated <style>\)/);

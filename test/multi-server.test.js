@@ -118,11 +118,11 @@ test('ask: the dialog shows account, From, To, Subject and body; ticked accept s
 test('ask: the dialog lists attachment names and truncates long bodies', async (t) => {
   const h = await startMulti({ elicit: () => ({ action: 'decline' }) });
   t.after(h.close);
-  await h.call('send_message', { account: 'personal', ...MSG, text: 'x'.repeat(2000), attachments: [{ filename: 'report.pdf', contentBase64: 'AA==' }] });
+  await h.call('send_message', { account: 'personal', ...MSG, text: 'x'.repeat(7000), attachments: [{ filename: 'report.pdf', contentBase64: 'AA==' }] });
   assert.match(h.elicitations[0].message, /Attachments \(1\): report\.pdf \(application\/octet-stream, supplied inline, 1 bytes\)/);
-  assert.match(h.elicitations[0].message, /2000 characters/);
-  assert.match(h.elicitations[0].message, /x{500}…/);
-  assert.doesNotMatch(h.elicitations[0].message, /x{501}/);
+  assert.match(h.elicitations[0].message, /7000 characters/);
+  assert.match(h.elicitations[0].message, /x{5000}…\n\[2000 more characters are not shown\]/);
+  assert.doesNotMatch(h.elicitations[0].message, /x{5001}/);
 });
 
 for (const [label, answer, reason] of [
