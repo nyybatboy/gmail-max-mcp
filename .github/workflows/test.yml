@@ -1,5 +1,6 @@
-# CI: run the unit suite (node --test) on every push/PR. The tests are hermetic —
-# pure MIME/reply-addressing/html-render units over lib/, no Gmail creds, no network.
+# CI: run the unit suite (node --test) on every push/PR. The tests are hermetic:
+# units over lib/, an in-memory MCP client against fake per-account Gmail clients,
+# and the real bin/ entry points run in temporary directories. No Gmail creds, no network.
 name: test
 on:
   push:

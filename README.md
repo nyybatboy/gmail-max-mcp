@@ -6,10 +6,16 @@ The full Gmail API surface as an MCP server (~55 tools). Install this when the d
 
 ```
 lib/
-  auth.js   OAuth 2.0 desktop flow + token cache + error mappers
-  mime.js   multipart MIME builder (attachments + threaded reply headers + plaintext->HTML rendering)
-  gmail.js  thin wrappers over googleapis (~50 fns) wrapped in an
-            error-mapping safe() wrapper so 403/401 surface with fix-it lines
+  auth.js      OAuth 2.0 desktop flow + token cache + error mappers
+  mime.js      multipart MIME builder (attachments + threaded reply headers + plaintext->HTML rendering)
+  gmail.js     thin wrappers over googleapis (~50 fns) wrapped in an
+               error-mapping safe() wrapper so 403/401 surface with fix-it lines
+  tools.js     the MCP tool table (name, description, input schema, handler)
+  server.js    single-account server, and the multi-account server
+  accounts.js  accounts.json: registry, permission groups, allow/ask/block resolution
+  context.js   per-call account context used by auth.js and gmail.js
+  approval.js  the "ask" dialog text and refusal messages
+  id-ledger.js which account an ID came from (error hints only)
 bin/
   gmail-cli.js   shell interface (testable standalone, scriptable);
                  hosts `auth` (OAuth flow) and `auth-status` (diagnostic)
@@ -35,19 +41,82 @@ claude mcp add gmail-max -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.j
 
 After registration, tools surface as `mcp__gmail-max__*` (or your chosen name's prefix).
 
-**Multiple accounts:** set `GMAIL_MCP_CONFIG_DIR` to point a second registration at its own
-credentials/token/profile cache (default `~/.gmail-mcp`). Same OAuth client can be reused —
-copy `credentials.json` into the new dir and run `auth` there:
+**More than one account:** one server can serve up to five. See [Multiple accounts](#multiple-accounts) below. `GMAIL_MCP_CONFIG_DIR` still moves the whole config directory (default `~/.gmail-mcp`).
+
+## Multiple accounts
+
+Off until you add an account; with no `accounts.json` in the config directory the server behaves exactly as a single-account server always has.
 
 ```bash
-mkdir -m 700 ~/.gmail-mcp-second && cp ~/.gmail-mcp/credentials.json ~/.gmail-mcp-second/
-GMAIL_MCP_CONFIG_DIR=~/.gmail-mcp-second node bin/gmail-cli.js auth
-claude mcp add gmail-second -e GMAIL_MCP_CONFIG_DIR=$HOME/.gmail-mcp-second -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.js
+node bin/gmail-cli.js accounts add personal --purpose "Main inbox." --dir ~/.gmail-mcp   # adopt an existing token
+node bin/gmail-cli.js accounts add work --purpose "Work inbox: clients and invoices."      # runs the consent flow
 ```
+
+**Choosing the account.** Every tool takes a required `account` argument. There is no default, so a call cannot quietly land in the wrong mailbox. The argument is an enum of the account labels, and its description carries each account's purpose line, so the model chooses by meaning. A call without `account`, or with an unknown label, is refused.
+
+**What comes back.** Every result names the account and address it acted on: `{ "account": "work", "address": "...", "result": { ... } }`. Tools that compose mail (`send_message`, `send_draft`, `create_draft`, `create_reply_draft`, `update_draft`) lead with the From address: `{ "account", "from", "address", "result" }`. Errors carry `account` too.
+
+**Permissions, per account.** Each account has its own permission for every tool, in one of three states:
+
+| State | What happens |
+|---|---|
+| `allow` | Runs. |
+| `ask` | The server asks you in a dialog first (MCP elicitation) and runs only if you tick the box and submit. If your client cannot show the dialog, the call is refused. |
+| `block` | Refused. A tool blocked on every account is not listed at all; an account blocked for a tool is left out of that tool's `account` choices. |
+
+Tools are grouped so the file stays short. A setting can name a group or one tool; a tool setting beats its group, which beats the built-in default.
+
+| Group | Default | Tools |
+|---|---|---|
+| `read` | allow | every `list_*`, `get_*`, `batch_get_*`, `whoami`, `list_history` |
+| `draft` | allow | `create_draft`, `create_reply_draft`, `update_draft`, `delete_draft` |
+| `organize` | allow | `modify_*`, `batch_modify_messages`, `trash_*`, `untrash_*`, `create_label`, `update_label`, `delete_label` |
+| `send` | **ask** | `send_message`, `send_draft` |
+| `delete` | **ask** | `delete_message`, `batch_delete_messages`, `delete_thread` (permanent, skip Trash) |
+| `routing` | **ask** | `create_filter`, `delete_filter`, `update_auto_forwarding`, `create_forwarding_address`, `delete_forwarding_address`, `create_delegate`, `delete_delegate`, `create_send_as`, `update_send_as`, `delete_send_as`, `verify_send_as` |
+| `settings` | allow | `update_vacation`, `update_imap`, `update_pop`, `update_language`, `insert_smime`, `set_default_smime`, `delete_smime`, `watch`, `stop_watch` |
+
+`accounts.json` (in the config directory, mode 600):
+
+```json
+{
+  "version": 1,
+  "accounts": {
+    "personal": { "purpose": "Main inbox.", "dir": "/path/to/existing/folder", "permissions": { "send": "ask", "routing": "block" } },
+    "work":     { "purpose": "Work inbox: clients and invoices.", "permissions": { "send": "allow", "delete_thread": "block" } }
+  }
+}
+```
+
+`dir` is optional (default `<config dir>/accounts/<label>/`); it holds that account's `token.json` and `profile.json`, and may hold its own `credentials.json`, which then takes precedence over the shared one. Edit the file by hand or use the CLI; the server re-reads it on every call, so a change applies to the next call, and it tells the client the tool list changed. An invalid file stops the server from starting; a file broken while it runs makes every call fail until it is fixed.
+
+```bash
+node bin/gmail-cli.js accounts list | add | remove <label> [--delete-token]
+node bin/gmail-cli.js permissions show [<label>]
+node bin/gmail-cli.js permissions set <label> <group|tool> allow|ask|block
+node bin/gmail-cli.js permissions clear <label> <group|tool>
+node bin/gmail-cli.js permissions block-all-sends
+```
+
+`block-all-sends` is a one-time action, not a switch: it sets `send` to `block` on every account (clearing per-tool send overrides) and stops. Each account can be changed again individually afterwards.
+
+**The ask dialog.** For a send it shows the account and its address, From, To, Cc, Bcc, Subject, attachment names and the first 500 characters of the body; for `send_draft` the server reads the draft first and shows what it actually contains. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask.
+
+**When the client cannot ask** (no elicitation support, a headless run): the call is refused with the reason. For a send, the refusal tells the model to leave a draft with `create_draft` instead (when drafts are allowed on that account) so you can send it from Gmail. The server never creates that draft on its own. The CLI applies the same rules: `ask` prompts in an interactive terminal and is refused anywhere else.
+
+**The model cannot change permissions.** No tool writes them. `list_accounts` shows them, read-only, and refusal messages never point at how to change them. Permissions protect against an agent's mistakes; they are not a defence against anyone with a shell on the same machine, who can edit the file or use a token directly. An `ask` is also only as honest as your client: a client configured to auto-answer dialogs has skipped the question by your choice.
+
+**Want ask-before-send with a single account?** Add just that one account; multi-account mode works with one.
+
+**Not-found hints.** If a call fails because an ID belongs to another account seen earlier in the same session, the error says so. Gmail already rejects the ID; this only makes the message clearer, and IDs the server has not seen pass through unchanged.
 
 ## Tool catalog
 
 All tools accept JSON arguments matching their declared input schema. Names below are the MCP tool names. The CLI exposes the same surface with kebab-case subcommands; `node bin/gmail-cli.js --help` prints the full mapping.
+
+In multi-account mode every tool below also takes a required `account` (one of your labels), and one extra tool exists:
+
+- **`list_accounts`** — `{}` → `{ accounts: [{ label, purpose, address, permissions: { groups, overrides } }] }`. Read-only.
 
 ### Profile
 
@@ -184,6 +253,10 @@ Each entry has the same shape as an attachment (`path` or `contentBase64` + `fil
 
 These are not enforced by the server — they are the conventions an agent should follow when composing emails through these tools, because Gmail's rendering and threading semantics demand them.
 
+### Several accounts: choose `account` on every call
+
+In multi-account mode, pick `account` from the purpose lines in its description, or call `list_accounts`. Check the `account` and `from` at the top of each result before reporting work as done. A refusal with `refused: true` is final for that call: follow its suggestion (usually a draft), and do not retry unless the user asks.
+
 ### Reply drafts: use `create_reply_draft`, not `create_draft`
 
 A draft created via `create_draft` with `inReplyTo` and `threadId` set will be linked to the thread, but it will not include the parent body as quoted text — Gmail's API does not auto-quote. The recipient sees a stripped reply with no context. `create_reply_draft` is the correct tool for any threaded reply: it pulls the parent, builds the quoted body in Gmail's exact byte format (so it renders identically to a Gmail web UI reply), and handles signature placement (signature appears between user body and quoted parent, matching Gmail web UI order).
@@ -244,14 +317,16 @@ All stored at `~/.gmail-mcp/`, mode 700 directory:
 - `credentials.json` (mode 600) — your OAuth client (`client_id`, `client_secret`). Not a secret per se — it's the public identity of your OAuth app, but treat as sensitive to avoid impersonation.
 - `token.json` (mode 600) — refresh token. **This is the secret.** Anyone with this file plus your `client_id`/`client_secret` has full mail access until the token is revoked.
 - `profile.json` (mode 600) — `{ email, historyId, cachedAt }`, 7-day TTL. `whoami --fresh` forces a refetch.
+- `accounts.json` (mode 600, multi-account mode only) — account labels, purposes, folders and permissions. No secrets.
+- `accounts/<label>/` (multi-account mode, unless the account sets its own `dir`) — that account's `token.json`, `profile.json`, and optionally its own `credentials.json`.
 
 None of these are committed; the project's `.gitignore` covers `credentials.json`, `token.json`, `profile.json`, and `client_secret*.json` at any path.
 
 ### If you want to narrow the blast radius
 
-The repo intentionally does not ship a config-driven policy / allowlist layer — agents that drive this server are the trust boundary, and a JSON allowlist a misbehaving agent could read or rewrite is not a meaningful defense. If you want to fork and add policy enforcement, the right place is `bin/gmail-mcp.js`'s `CallToolRequestSchema` handler (around the `tool.handler(args || {})` call) — wrap it in your own check that reads e.g. an `~/.gmail-mcp/policy.json` and decides whether to allow the call based on tool name + args. Examples of useful policies: deny-all `*delete*` tools; deny `send_message` if `to` doesn't match an allowlist; require human-in-the-loop confirmation for `create_filter` and any settings update.
+Use the per-account permissions in [Multiple accounts](#multiple-accounts) (they work with a single account too): `ask` puts a human confirmation in front of a tool or group, `block` refuses it and removes it from the tool list. By default sends, permanent deletes and routing changes ask. Be clear about what this is: a guard against an agent's mistakes, enforced by this server. It is not a defence against anyone who can run commands on the same machine, since they can edit `accounts.json` or use the token directly, and the OAuth scope itself is unchanged.
 
-The ~55 tools split fairly cleanly into read-only (list_*, get_*, batch_get_*, whoami) and mutating (send_*, create_*, update_*, modify_*, delete_*, trash_*, untrash_*, watch, stop_watch). A scope-narrowing fork could simply omit the mutating tools from the `TOOLS` map.
+Finer policies (for example, deny `send_message` unless `to` matches an allowlist) are not built in. The place to add them is the multi-account `CallToolRequestSchema` handler in `lib/server.js`, next to the permission check. A scope-narrowing fork could also simply omit tools from the `TOOLS` map in `lib/tools.js`.
 
 ### What this server does not do
 
@@ -264,6 +339,7 @@ The ~55 tools split fairly cleanly into read-only (list_*, get_*, batch_get_*, w
 - `~/.gmail-mcp/credentials.json` — your OAuth client (mode 600, never committed)
 - `~/.gmail-mcp/token.json` — refresh token cache (mode 600)
 - `~/.gmail-mcp/profile.json` — `{email, historyId, cachedAt}` (mode 600, 7-day TTL); `whoami --fresh` forces a refetch.
+- `~/.gmail-mcp/accounts.json` and `~/.gmail-mcp/accounts/<label>/` — multi-account mode only; see [Multiple accounts](#multiple-accounts).
 
 ## License
 

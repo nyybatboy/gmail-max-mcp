@@ -73,6 +73,37 @@ claude mcp add gmail-max -- node /absolute/path/to/gmail-max-mcp/bin/gmail-mcp.j
 
 Restart Claude Code (or end this session and start a new one). Tools surface as `mcp__gmail-max__*`.
 
+## 5. Optional: more than one account (up to 5)
+
+One server can serve up to five Gmail accounts. Each account keeps its own token and its own permissions. Turning this on is one command; until you run it, nothing changes.
+
+```bash
+# Your existing account: adopt the folder it already lives in (no re-consent).
+node bin/gmail-cli.js accounts add personal --purpose "Main inbox." --dir ~/.gmail-mcp
+
+# A second account: runs the consent flow in the browser. Sign in as the OTHER account.
+node bin/gmail-cli.js accounts add work --purpose "Work inbox: clients and invoices."
+
+node bin/gmail-cli.js accounts list
+node bin/gmail-cli.js auth-status --account work
+```
+
+The first `accounts add` creates `~/.gmail-mcp/accounts.json`, which switches the server and CLI into multi-account mode. Restart your MCP client afterwards. From then on every tool needs an `account` argument and every CLI Gmail command needs `--account`; there is no default account.
+
+**OAuth client.** A new account uses the shared `~/.gmail-mcp/credentials.json`; one OAuth client serves every account, and each account consents separately. An adopted folder that has its own `credentials.json` keeps using it, because a refresh token only works with the client that issued it.
+
+**Permissions.** New accounts start on the built-in defaults: sending, permanent deletes and mail-routing changes **ask** you first; everything else is allowed. Change them per account:
+
+```bash
+node bin/gmail-cli.js permissions show
+node bin/gmail-cli.js permissions set work send allow
+node bin/gmail-cli.js permissions set personal routing block
+```
+
+See README "Multiple accounts" for the full model.
+
+**Coming from one registration per account** (`GMAIL_MCP_CONFIG_DIR` pointing a second registration at its own folder): adopt each folder with `accounts add <label> --dir <folder>`, set permissions, keep one registration, and remove the others. Tool names are those of the registration you keep. To undo, delete or rename `accounts.json` and restore the extra registrations; the adopted folders are never moved or changed.
+
 ## Adding new scopes later
 
 Update `SCOPES` in `lib/auth.js`, then:
