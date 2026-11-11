@@ -14,11 +14,11 @@ import * as G from '../lib/gmail.js';
 import { runWithAccount } from '../lib/context.js';
 import {
   accountsFileExists, accountsFilePath, loadAccounts, saveAccounts, accountPaths, findAccount,
-  addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary,
+  addAccount, removeAccount, setPermission, blockAllSends, resolvePermission, permissionSummary, accountContext,
   groupOf, GROUPS, MAX_ACCOUNTS, parseAccounts, serializeAccounts,
 } from '../lib/accounts.js';
 import {
-  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText,
+  approvalMessage, outgoingFromArgs, outgoingFromDraft, refusalText, validateComposeArgs, describeOutgoing,
 } from '../lib/approval.js';
 
 const PROFILE_CACHE = path.join(CONFIG_DIR, 'profile.json');
@@ -136,6 +136,8 @@ Multiple accounts (up to ${MAX_ACCOUNTS}; on once ${path.join(CONFIG_DIR, 'accou
   Groups: ${Object.keys(GROUPS).join(', ')}
   In multi-account mode every Gmail command needs --account <label> (no default).
   "ask" prompts in an interactive terminal and refuses otherwise; "block" refuses.
+  The CLI prompt is a courtesy check, not a barrier: anything with a shell on this
+  machine can edit the accounts file. The MCP server is what guards against the model.
 
 Paths:
   OAuth client:  ${CREDENTIALS_PATH}
@@ -332,45 +334,78 @@ const CLI_TOOL_EXCEPTIONS = {
   'batch-modify': 'batch_modify_messages',
   'batch-delete': 'batch_delete_messages',
 };
+// Commands that are not Gmail tools and need no permission check.
+const NO_TOOL_COMMANDS = new Set(['auth', 'auth-status']);
+// CLI subcommands whose arguments compose a message (validated like the server).
+const COMPOSE_COMMANDS = new Set(['send', 'create-draft', 'update-draft', 'reply-draft']);
+
+/** The tool a subcommand runs; null for auth commands; throws if unmapped. */
 function toolForCommand(cmd) {
-  if (cmd === 'auth' || cmd === 'auth-status') return null;
+  if (NO_TOOL_COMMANDS.has(cmd)) return null;
   const tool = CLI_TOOL_EXCEPTIONS[cmd] || cmd.replace(/-/g, '_');
-  return groupOf(tool) ? tool : null;
+  if (!groupOf(tool)) {
+    // Fail closed: a subcommand with no permission mapping never runs in
+    // multi-account mode (unknown commands also land here).
+    throw new Error(`Unknown or unmapped command "${cmd}" in multi-account mode; refusing. See --help.`);
+  }
+  return tool;
 }
 
+// Resolves true (y/yes), false (anything else), or null (Ctrl-D / closed input).
 async function confirmOnTty(message) {
   process.stderr.write(`${message}\n\nProceed? [y/N] `);
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const answer = await new Promise((resolve) => rl.question('', resolve));
+  const answer = await new Promise((resolve) => {
+    let done = false;
+    rl.question('', (a) => { done = true; resolve(a); });
+    rl.on('close', () => { if (!done) resolve(null); });
+  });
   rl.close();
+  if (answer === null) {
+    process.stderr.write('\n');
+    return null;
+  }
   return /^y(es)?$/i.test(answer.trim());
 }
 
-// Same allow / ask / block rules as the MCP server. "ask" needs a person at an
-// interactive terminal; anything else (a script, an agent's shell) is refused
-// before any Gmail call is made.
-async function enforcePermission({ cmd, account, json, flags }) {
+// Same allow / ask / block rules as the MCP server. "ask" prompts only on an
+// interactive terminal and is refused anywhere else. This is a courtesy check,
+// not a barrier: anything that can run a shell here can already edit the
+// accounts file. The guard against the model's mistakes is the MCP server.
+async function enforcePermission({ cmd, account, json, flags, ctx }) {
   const tool = toolForCommand(cmd);
   if (!tool) return;
+  if (COMPOSE_COMMANDS.has(cmd)) validateComposeArgs(json || {}, ctx.protectedRoots);
   const state = resolvePermission(account, tool);
   if (state === 'allow') return;
   const draftAllowed = resolvePermission(account, 'create_draft') !== 'block';
   const refuse = (reason) => new CliRefusal({
     account: account.label, refused: true, reason: refusalText({ reason, tool, label: account.label, draftAllowed }),
   });
-  if (state === 'block') throw refuse('blocked');
+  if (state !== 'ask') throw refuse('blocked');
   if (!(process.stdin.isTTY && process.stderr.isTTY)) throw refuse('cannot-ask');
   let address = null;
   try { address = (await G.getProfile())?.emailAddress || null; } catch { /* informational */ }
   let outgoing = null;
+  let draft = null;
   if (tool === 'send_message') {
     let from = null;
     try { from = await G.getDefaultFromAddress(); } catch { /* informational */ }
     outgoing = outgoingFromArgs(json || {}, from);
   }
-  if (tool === 'send_draft') outgoing = outgoingFromDraft(await G.getDraft({ id: flags.id, format: 'full' }));
+  if (tool === 'send_draft') {
+    draft = await G.getDraft({ id: flags.id, format: 'full' });
+    outgoing = outgoingFromDraft(draft);
+  }
   const message = approvalMessage({ tool, label: account.label, address, outgoing, args: json || flags });
-  if (!(await confirmOnTty(message))) throw refuse('declined');
+  const answer = await confirmOnTty(message);
+  if (answer === null) throw refuse('no-answer');
+  if (!answer) throw refuse('declined');
+  if (draft) {
+    const now = await G.getDraft({ id: flags.id, format: 'full' });
+    if (now?.message?.id !== draft?.message?.id
+      || describeOutgoing(outgoingFromDraft(now)) !== describeOutgoing(outgoing)) throw refuse('changed');
+  }
 }
 
 function requireLabel(label, what) {
@@ -503,7 +538,8 @@ async function main() {
   let json = null;
   if (args.flags.json) {
     json = JSON.parse(args.flags.json);
-  } else {
+  } else if (cmd !== 'accounts' && cmd !== 'permissions') {
+    // accounts / permissions never take JSON input: do not wait on a piped stdin.
     const stdin = await readStdin();
     if (stdin) json = JSON.parse(stdin);
   }
@@ -536,10 +572,10 @@ async function main() {
     }
     const account = findAccount(cfg, f.account);
     if (!account) throw new Error(`Unknown account "${f.account}". Choose one of: ${labels}.`);
-    const paths = accountPaths(CONFIG_DIR, account);
-    await runWithAccount(paths, async () => {
-      await enforcePermission({ cmd, account, json, flags: f });
-      await run(paths);
+    const ctx = accountContext(CONFIG_DIR, cfg, account);
+    await runWithAccount(ctx, async () => {
+      await enforcePermission({ cmd, account, json, flags: f, ctx });
+      await run(ctx);
     });
   } catch (err) {
     if (err instanceof CliRefusal) {
