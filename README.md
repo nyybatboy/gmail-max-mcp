@@ -14,7 +14,9 @@ lib/
   server.js    single-account server, and the multi-account server
   accounts.js  accounts.json: registry, permission groups, allow/ask/block resolution
   context.js   per-call account context used by auth.js and gmail.js
-  approval.js  the "ask" dialog text and refusal messages
+  approval.js  the "ask" dialog text, answer reading, compose checks, refusal messages
+  fs-guard.js  keeps file reads/writes out of gmail-max's own folders (multi-account mode)
+  prompt.js    the CLI's y/N prompt for "ask"
   id-ledger.js which account an ID came from (error hints only)
 bin/
   gmail-cli.js   shell interface (testable standalone, scriptable);
@@ -100,11 +102,24 @@ node bin/gmail-cli.js permissions block-all-sends
 
 `block-all-sends` is a one-time action, not a switch: it sets `send` to `block` on every account (clearing per-tool send overrides) and stops. Each account can be changed again individually afterwards.
 
-**The ask dialog.** For a send it shows the account and its address, From, To, Cc, Bcc, Subject, attachment names and the first 500 characters of the body; for `send_draft` the server reads the draft first and shows what it actually contains. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask.
+**The ask dialog.** For a send it shows everything that leaves the account: the account and its address, every header in the order it is sent (From, To, Cc, Bcc, Reply-To, Subject, In-Reply-To, References and any extra header; a header that appears twice is flagged), every attachment and inline image with where its bytes come from and their size, and the body the recipient will see (the HTML when there is one) with its total length and the first 500 characters. When the plain-text version differs from the HTML, the dialog says so and shows both. For `send_draft` the server reads the draft first and shows what it actually contains, to the same standard; after you approve it reads the draft again and refuses if it changed in the meantime. The form has one checkbox that defaults to unticked; only an explicit tick and submit proceeds, so a client that auto-submits defaults sends nothing. Declined, cancelled, or no answer within five minutes: nothing happens, and the model is told not to retry unless you ask. If the client abandons the tool call while the dialog is open, a later approval does nothing.
 
-**When the client cannot ask** (no elicitation support, a headless run): the call is refused with the reason. For a send, the refusal tells the model to leave a draft with `create_draft` instead (when drafts are allowed on that account) so you can send it from Gmail. The server never creates that draft on its own. The CLI applies the same rules: `ask` prompts in an interactive terminal and is refused anywhere else.
+For other actions set to `ask`, the dialog prints the deciding fields first and in full (for example a filter's forward target, a send-as reply-to address, a delegate, the number of messages a batch delete touches), counts every list, and truncates only the rest. Secrets and binary data are never shown.
 
-**The model cannot change permissions.** No tool writes them. `list_accounts` shows them, read-only, and refusal messages never point at how to change them. Permissions protect against an agent's mistakes; they are not a defence against anyone with a shell on the same machine, who can edit the file or use a token directly. An `ask` is also only as honest as your client: a client configured to auto-answer dialogs has skipped the question by your choice.
+**Composing in multi-account mode.** To keep the dialog honest, a compose call is refused if a header-bound argument contains a line break, if `headers` tries to set To, Cc, Bcc, From, Reply-To, Sender, Subject or the MIME structure headers (use the dedicated arguments), or if an attachment name contains a quote.
+
+**gmail-max's own files are off limits.** In multi-account mode, `get_attachment` refuses a `savePath` inside the config directory, any account folder, or the package's own folder (symlinks are resolved), and never overwrites an existing file. Attachment and inline-image `path` reads inside the config directory or an account folder are refused, so a token or the accounts file cannot be mailed. Single-account mode is unchanged.
+
+**When the client cannot ask** (no elicitation support, a headless run, or a client that cancels or never answers): the call is refused with the reason. For a send, the refusal tells the model to leave a draft with `create_draft` instead (when drafts are allowed on that account) so you can send it from Gmail. The server never creates that draft on its own.
+
+**The CLI.** It applies the same allow/ask/block rules: `ask` prompts y/N in an interactive terminal and is refused anywhere else. Treat that prompt as a courtesy check, not a barrier: a process driving a pseudo-terminal can answer it, and anything that can run a shell on the machine can edit `accounts.json` anyway.
+
+**The model cannot change permissions through this server.** No tool writes them, the file guard above keeps tools away from the accounts file, `list_accounts` shows permissions read-only, and refusal messages never point at how to change them. That is the scope of the protection: permissions guard against the model's mistakes made through this server. They are not a defence against anything with a shell on the same machine, which can edit the file or use a token directly. An `ask` is also only as honest as your client: a client configured to auto-answer dialogs has skipped the question by your choice.
+
+**Choosing your permissions.** The defaults are a starting point. Three things worth knowing:
+- `update_vacation` (group `settings`, allow by default) turns on an auto-responder that sends replies in your name to whoever writes in. If that should need your approval, set it to `ask` on that account.
+- `delete_draft` and `update_draft` (group `draft`, allow) can destroy or overwrite a draft you wrote by hand. Set them to `ask` if you keep hand-written drafts in an account.
+- Permissions are per account, not per piece of content. An account where send is `allow` can carry text the model read from an account where send is `ask`. If that matters, keep send on `ask` everywhere it could.
 
 **Want ask-before-send with a single account?** Add just that one account; multi-account mode works with one.
 
